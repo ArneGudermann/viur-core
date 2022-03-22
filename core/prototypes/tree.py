@@ -390,6 +390,11 @@ class Tree(BasicApplication):
 			raise errors.NotFound()
 		if not self.canAdd(skelType, parentNodeSkel):
 			raise errors.Unauthorized()
+
+		skel["parententry"] = parentNodeSkel["key"]
+		# parentrepo may not exist in parentNodeSkel as it may be an rootNode
+		skel["parentrepo"] = parentNodeSkel["parentrepo"] or parentNodeSkel["key"]
+
 		if (len(kwargs) == 0  # no data supplied
 			or skey == ""  # no security key
 			or not skel.fromClient(kwargs)  # failure on reading into the bones
@@ -399,9 +404,6 @@ class Tree(BasicApplication):
 			return self.render.add(skel)
 		if not securitykey.validate(skey, useSessionKey=True):
 			raise errors.PreconditionFailed()
-		skel["parententry"] = parentNodeSkel["key"]
-		# parentrepo may not exist of parentNodeSkel as it may be an rootNode
-		skel["parentrepo"] = parentNodeSkel["parentrepo"] or parentNodeSkel["key"]
 		self.onAdd(skelType, skel)
 		skel.toDB()
 		self.onAdded(skelType, skel)
