@@ -8,10 +8,13 @@ from viur.core.cache import flushCache
 from viur.core.skeleton import Skeleton, SkeletonInstance
 from viur.core.tasks import CallDeferred
 from .skelmodule import SkelModule
-
+from ..bones import Compute, ComputeInterval, ComputeMethod, NumericBone
 
 SkelType = Literal["node", "leaf"]
 
+
+def count_childs(skel):
+    return db.Query(skel.kindName).filter("parententry =", skel["key"]).count()
 
 class TreeSkel(Skeleton):
     parententry = KeyBone(
@@ -28,7 +31,12 @@ class TreeSkel(Skeleton):
         visible=False,
         readOnly=True,
     )
-
+    child_count = NumericBone(
+        visible=False,
+        readOnly=True,
+        compute=Compute(fn=count_childs, interval=ComputeInterval(method=ComputeMethod.OnWrite)),
+        defaultValue=-1,  # Not computed yet
+    )
     @classmethod
     def refresh(cls, skelValues):  # ViUR2 Compatibility
         super().refresh(skelValues)
@@ -544,6 +552,7 @@ class Tree(SkelModule):
             raise errors.PreconditionFailed()
 
         currentParentRepo = skel["parentrepo"]
+        old_parententry_key = skel["parententry"]
         skel["parententry"] = parentNodeSkel["key"]
         skel["parentrepo"] = parentNodeSkel["parentrepo"]  # Fixme: Need to recursive fixing to parentrepo?
         if "sortindex" in kwargs:
@@ -559,6 +568,13 @@ class Tree(SkelModule):
         # Ensure a changed parentRepo get's proagated
         if currentParentRepo != parentNodeSkel["parentrepo"]:
             self.updateParentRepo(key, parentNodeSkel["parentrepo"])
+        parentNodeSkel.toDB() # Trigger compute method
+
+        parentNodeSkel.toDB()
+        old_parent_node_skel = self.baseSkel("node")
+        logging.error(f"old  {str(old_parententry_key)}")
+        if old_parent_node_skel.fromDB(old_parententry_key):
+            old_parent_node_skel.toDB()
 
         return self.render.editSuccess(skel)
 
