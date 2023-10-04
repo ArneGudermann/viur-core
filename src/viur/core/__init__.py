@@ -77,26 +77,6 @@ __all__ = [
 ]
 
 
-def load_indexes_from_file() -> Dict[str, List]:
-    """
-        Loads all indexes from the index.yaml and stores it in a dictionary  sorted by the module(kind)
-        :return A dictionary of indexes per module
-    """
-    indexes_dict = {}
-    try:
-        with open(os.path.join(conf["viur.instance.project_base_path"], "index.yaml"), "r") as file:
-            indexes = yaml.safe_load(file)
-            indexes = indexes.get("indexes", [])
-            for index in indexes:
-                index["properties"] = [_property["name"] for _property in index["properties"]]
-                indexes_dict.setdefault(index["kind"], []).append(index)
-
-    except FileNotFoundError:
-        logging.warning("index.yaml not found")
-        return {}
-
-    return indexes_dict
-
 
 def setDefaultLanguage(lang: str):
     """
@@ -165,7 +145,6 @@ def buildApp(modules: Union[ModuleType, object], renderers: Union[ModuleType, Di
     modules.script = Script
 
     # create module mappings
-    indexes = load_indexes_from_file()  # todo: datastore index retrieval should be done in SkelModule
     resolver = {}
 
     for module_name, module_cls in vars(modules).items():  # iterate over all modules
@@ -186,7 +165,6 @@ def buildApp(modules: Union[ModuleType, object], renderers: Union[ModuleType, Di
             module_instance = module_cls(
                 module_name, ("/" + render_name if render_name != default else "") + "/" + module_name
             )
-            module_instance.indexes = indexes.get(module_name, [])  # todo: Fix this in SkelModule (see above!)
 
             # Attach the module-specific or the default render
             if render_name == default:  # default or render (sub)namespace?

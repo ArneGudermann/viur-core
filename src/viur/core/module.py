@@ -554,10 +554,6 @@ class Module:
             },
         }
 
-        # Extend indexes, if available
-        # todo: This must be handled by SkelModule
-        if indexes := getattr(self, "indexes", None):
-            ret["indexes"] = indexes
 
         # Merge adminInfo if present
         if admin_info := self.adminInfo() if callable(self.adminInfo) else self.adminInfo:
