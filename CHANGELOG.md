@@ -1,6 +1,140 @@
 # Changelog
 
-This file documents any relevant changes done to ViUR-core since version 3.0.0.
+This file documents any relevant changes done to ViUR-core since version 3.
+
+## [3.5.1]
+
+- fix: Accept `staticSecurityKey` from sessions created by viur-core < 3.5 (#877)
+- fix: Replace unused `otpTemplate` by new `second_factor_login_template` (#876)
+- fix(docs): Add and lock all docs dependencies (#875)
+- fix: Remove the `style` which is reserved for template completely from the request kwargs (#870)
+- fix: Re-add missing `skel.fromDB()` in `Tree.move` (#874)
+- ci: Fixed codecov path
+
+## [3.5.0]
+
+- fix: Move warning-email "Debug mode enabled" (#869)
+- fix: Add logging for raised `HTTPException` (#864)
+- fix: Remove replace of `.` to `_` (#865)
+- fix: Reactivate old-style `trace*CallRouting` for backward compatibility (#866)
+- fix: Remove `viur.core` decorator import advise (#868)
+- feat: Add `onAdd()`-hook in `User.add()` method (#863)
+- fix: Include `requirements.txt` in dist wheel again (#862)
+- fix: Additional fixing for `@skey(allow_empty=True)` (#861)
+- fix: Re-include `templates/` folder as data-files (#858)
+- fix: For #850, return skel in transaction (#857)
+- fix: `html.Render.getTemplateFileName()` should be deterministic (#855)
+- fix: Updating admin info stuff (#852)
+- fix: @skey-requirement determination and `/user/verify` (#850)
+- fix: Customizable template name for `second_factor_choice` (#845)
+- fix: Clean-up user/view and user/edit with "self" (#848)
+- fix: For #842, use `self.kwargs` for list parsing (#849)
+- fix: mixed up and blurred methods and concepts in User.otp (#846)
+- fix: Replace call to `utils.getCurrentUser()` (#847)
+- fix: import qrcode's element with an alias (#844)
+- refactor: Refactor `Router` & collect context-variables to `current.request.get().context` (#842)
+- feat: Second factor OTP login using Authenticator App (#578)
+- fix: Add default value for `token`-parameter in `GoogleAccount.login()` (#843)
+- feat: Avoid multiple CSRF-security-key validation (#841)
+- refactor: Use `parse_bool()` for bool Method type annotations (#840)
+- feat: Implement `utils.parse_bool` (#838)
+- feat: Extend `Method` to examine function signature and parse type annotations (#837)
+- refactor: Prototype action functions (#831)
+- refactor: Some clean-up on #800 (#828)
+- feat: Add `secret` module to access values from GC secret manager (#815)
+- fix: `Method.__name__` improves #800 (#827)
+- fix: Add missing import on #800 (#826)
+- feat: Implement a new `Module`/`Method` concept with new decorators (#800)
+- feat: Implement `retry_n_times` decorator (#655)
+- refactor: Refactor password recovery process in stock `User`-module (#682)
+- chore: Update pipenv and requirements.txt (#824)
+- fix: Update `PasswordBone`s test_threshold and its structure rendering  (#823)
+- fix: `renderEditForm` failed when `ignore` or `bone` was None (#819)
+- fix: `Tree.getRootNode` failed when parentrepo was None (#818)
+- feat: custom actions for user maintenance and debug triggers (#712)
+- feat: Add `bones` parameter for `renderEditForm` (#812)
+- refactor: User-module `TimeBasedOTP` (#802)
+- feat: Implement natural sorting in `StringBone` (#809)
+- feat: Implement a `PeriodicTask` to check the remaining SIB email quota (#808)
+- chore: Upate viur-datastore (#814)
+- fix: Add 'session_bound=False' for the skey during email verification (#810)
+- fix: docs configuration after #804 (#807)
+- refactor: Package and folder layout (#804)
+- refactor: Changed package folder layout
+- fix: pillow replaces `Image.ANTIALIAS` by `Image.LANCZOS`
+- fix: guessTimeZone() fails with Python 3.11 (#789)
+- feat: Make recipients for `sendEMailToAdmins` configurable (#798)
+- test: Update test-suite Pipfile and add tests for `DateBone` (#797)
+- refactor: Improving `DateBone.singleValueFromClient()` (#733)
+- refactor: `singleValueFromClient` with type hints and docstrings (#685)
+- docs: fixed all Auto-API build Errors (#783)
+- feat: Compute `creationdate` and `changedate` using the new `compute`-feature (#785)
+- fix: Add `Count` to db.__all__ (#792)
+- feat: Improve `BaseBone._compute` function (#786)
+- docs(build): set sphinx to an older version (as in the Pipfile) to get the build working again (#784)
+- feat: Add `compute`-feature to `BaseBone` (#639)
+- docs: Improve type hints in sphinx (#746)
+- docs: fixed toctree problems (#781)
+- docs: Tutorials for preliminaries and initial setup (#765)
+- feat: Extend User module to built-in role system (#736)
+- feat: Rewrite of session-based securitykeys (#764)
+- chore: Support for Python 3.11 (#767)
+- perf: Avoid structure rendering in JSON render list (#774)
+- feat: Delete old pending `FileSkeletons` (#739)
+- feat: Add search for error template in `html/error` (#658)
+- fix: `File.getUploadURL` with HttpExceptions (#743)
+- feat: Set `cls` to `CustomJsonEncoder` in Jinja's `json.dumps_kwargs` (#744)
+- fix: __undefined to _undefined (#737)
+- fix: Remove leading `Subject: ` from task notify emails (#740)
+- fix: readd StringBone type (#738)
+- chore: Rename `__systemIsIntitialized_` into `__system_initialized` (#730)
+- chore: Rename `__undefindedC__` into `__undefined` (#731)
+- chore: Rename all `rawValue`-parameters to just `value` (#732)
+- docs: Documentation for entire `bones`-module (#723)
+- docs: Add more selectors to theme.css to list styling from latest rdt theme (#729)
+- docs: Watch the normal python code path in the doc build watcher too (#728)
+- docs: Set language in readthedocs config and add jQuery (#721)
+- docs: removed hierarchyBone, changed to Python 3.10+ and removed wiki and community landing page (#707)
+- fix: `CredentialBone` without escaping (#702)
+- chore: Improve `StringBone` (#714)
+
+## [3.4.8]
+
+- chore: Update viur-datastore to 1.3.11 (#814)
+
+## [3.4.7]
+
+- chore: Update viur-datastore to 1.3.10 (#805)
+
+## [3.4.6]
+
+- fix(seo): Incoming url is compared wrong (#801)
+
+## [3.4.5]
+
+- fix: Add missing fallback for `NumericBone.refresh()` destroying valid data (#793)
+- fix: `getCurrentUser()` should clone `current.user` for use with Jinja (#791)
+- fix: Extend MetaBaseSkel reserved keywords to "structure" (#788)
+- chore: Reject pointless `BooleanBone(multiple=True)` (#773)
+
+## [3.4.4]
+
+- chore: Update dependencies (#762)
+- fix: Missing german translation for "password too short" message (#763)
+- fix: ensure the correct default defaultValue of a multiple/multi-lang `BooleanBone` (#759)
+- fix: Move super-call in `JsonBone.__init__()` to the begin (#758)
+
+## [3.4.3]
+
+- fix: #747 broke vi-renderer
+
+## [3.4.2]
+
+- fix: Fixes TypeError when password is unset (#748)
+- fix: `DateBone.fromClient()` should regard tzinfo (#749)
+- feat/fix: Allow `duration` argument for skey (#751)
+- fix: `CredentialBone` without escaping (#702) (#750)
+- fix: Add path_list to the __init__ of BrowseHandler (#747)
 
 ## [3.4.1]
 
@@ -284,7 +418,7 @@ This file documents any relevant changes done to ViUR-core since version 3.0.0.
 
 - Added validations to catch invalid recipient addresses early in sendEmail
 - 'connect-src': self and 'upgrade-insecure-requests' CSP directives by default
-- versionHash and appVersion variables to utils and jinja2 render 
+- versionHash and appVersion variables to utils and jinja2 render
 - The ability to import blobs that have been copied client-side from the old (non cloud-storage) blobstore
 - Support for custom colorprofiles in thumbnails
 - [Breaking] srcSetFor function in jinja2 now needs a list with or height instead of deriving from groups
@@ -313,6 +447,6 @@ This file documents any relevant changes done to ViUR-core since version 3.0.0.
 - Support for translation-dictionaries shipped with the application has been removed. Use the viur-translation datastore kind instead
 - The cache (viur.core.cache) is now automatically evicted in most cases based on entities accessed / queries run.
 - Memcache support. Caching for the datastore is not supported anymore
-- Full support for the dev_appserver. Now a gcp project is required for datastore/cloud store access 
+- Full support for the dev_appserver. Now a gcp project is required for datastore/cloud store access
 
 [develop]: https://github.com/viur-framework/viur-core/compare/main...develop
