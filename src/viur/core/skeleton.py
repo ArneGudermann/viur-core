@@ -1119,40 +1119,37 @@ class Skeleton(BaseSkeleton, metaclass=MetaSkel):
         return
 
     @classmethod
-    def delete(cls, skelValues):
+    def delete(cls, skel: SkeletonInstance) -> None:
         """
             Deletes the entity associated with the current Skeleton from the data store.
         """
 
-        def txnDelete(skel: SkeletonInstance):
-            skelKey = skel["key"]
-            dbObj = db.Get(skelKey)  # Fetch the raw object as we might have to clear locks
-            viurData = dbObj.get("viur") or {}
-            if dbObj.get("viur_incomming_relational_locks"):
+        def txnDelete(skel_to_delete: SkeletonInstance):
+            db_key = skel_to_delete["key"]
+            db_obj = db.Get(db_key)  # Fetch the raw object as we might have to clear locks
+            viur_data = db_obj.get("viur") or {}
+            if db_obj.get("viur_incomming_relational_locks"):
                 raise errors.Locked("This entry is locked!")
-            for boneName, bone in skel.items():
+            for bone_name, bone in skel_to_delete.items():
                 # Ensure that we delete any value-lock objects remaining for this entry
-                bone.delete(skel, boneName)
+                bone.delete(skel, bone_name)
                 if bone.unique:
-                    flushList = []
-                    for lockValue in viurData.get("%s_uniqueIndexValue" % boneName) or []:
-                        lockKey = db.Key("%s_%s_uniquePropertyIndex" % (skel.kindName, boneName), lockValue)
-                        lockObj = db.Get(lockKey)
-                        if not lockObj:
-                            logging.error("Programming error detected: Lockobj %s missing!" % lockKey)
-                        elif lockObj["references"] != dbObj.key.id_or_name:
-                            logging.error(
-                                "Programming error detected: %s did not hold lock for %s" % (skel["key"], lockKey))
+                    flush_list = []
+                    for lock_value in viur_data.get(f"{bone_name}_uniqueIndexValue") or []:
+                        lock_key = db.Key(f"{skel.kindName}_{bone_name}_uniquePropertyIndex", lock_value)
+                        if not (lock_obj := db.Get(lock_key)):
+                            logging.error(f"Programming error detected: lockkey {lock_key} missing!")
+                        elif lock_obj["references"] != db_obj.key.id_or_name:
+                            logging.error(f"Programming error detected: {db_key} did not hold lock for {lock_key}")
                         else:
-                            flushList.append(lockObj)
-                    if flushList:
-                        db.Delete(flushList)
+                            flush_list.append(lock_key)
+                    if flush_list:
+                        db.Delete(flush_list)
             # Delete the blob-key lock object
-            lockObjectKey = db.Key("viur-blob-locks", dbObj.key.id_or_name)
-            lockObj = db.Get(lockObjectKey)
-            if lockObj is not None:
+            lock_blob_key = db.Key("viur-blob-locks", db_obj.key.id_or_name)
+            if lockObj := db.Get(lock_blob_key):
                 if lockObj["old_blob_references"] is None and lockObj["active_blob_references"] is None:
-                    db.Delete(lockObjectKey)  # Nothing to do here
+                    db.Delete(lock_blob_key)  # Nothing to do here
                 else:
                     if lockObj["old_blob_references"] is None:
                         # No old stale entries, move active_blob_references -> old_blob_references
@@ -1164,26 +1161,26 @@ class Skeleton(BaseSkeleton, metaclass=MetaSkel):
                     lockObj["is_stale"] = True
                     lockObj["has_old_blob_references"] = True
                     db.Put(lockObj)
-            db.Delete(skelKey)
-            processRemovedRelations(skelKey)
-            return dbObj
+            db.Delete(db_key)
+            processRemovedRelations(db_key)
+            return db_obj
 
-        key = skelValues["key"]
-        if key is None:
+        db_key = skel["key"]
+        if db_key is None:
             raise ValueError("This skeleton is not in the database (anymore?)!")
-        skel = skeletonByKind(skelValues.kindName)()
-        if not skel.fromDB(key):
+        skel_form_db = skeletonByKind(skel.kindName)()
+        if not skel.fromDB(db_key):
             raise ValueError("This skeleton is not in the database (anymore?)!")
         if db.IsInTransaction():
-            dbObj = txnDelete(skel)
+            db_obj = txnDelete(skel)
         else:
-            dbObj = db.RunInTransaction(txnDelete, skel)
-        for boneName, _bone in skel.items():
-            _bone.postDeletedHandler(skel, boneName, key)
-        skel.postDeletedHandler(key)
+            db_obj = db.RunInTransaction(txnDelete, skel)
+        for bone_name, bone in skel.items():
+            bone.postDeletedHandler(skel_form_db, bone_name, db_key)
+        skel_form_db.postDeletedHandler(db_key)
         # Inform the custom DB Adapter
-        if skel.customDatabaseAdapter:
-            skel.customDatabaseAdapter.deleteEntry(dbObj, skel)
+        if skel_form_db.customDatabaseAdapter:
+            skel_form_db.customDatabaseAdapter.deleteEntry(db_obj, skel_form_db)
 
 
 class RelSkel(BaseSkeleton):
