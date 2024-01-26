@@ -289,11 +289,26 @@ class RelationalBone(BaseBone):
 
         self.updateLevel = updateLevel
         self.consistency = consistency
-
+        self.set_ref_keys()
         if getSystemInitialized():
             from viur.core.skeleton import RefSkel, SkeletonInstance
             self._refSkelCache = RefSkel.fromSkel(self.kind, *self.refKeys)
             self._skeletonInstanceClassRef = SkeletonInstance
+
+    def set_ref_keys(self):
+        from viur.core.skeleton import skeletonByKind
+        new_ref_keys = []
+        ref_skel = skeletonByKind(self.kind)
+        for ref_key in self.refKeys:
+            if ref_key[-1] == "*":  # we have a wild card prefix
+                prefix = ref_key[:-1]
+                for bone_name in ref_skel.__boneMap__.keys():
+                    if bone_name not in new_ref_keys and bone_name.startswith(prefix):
+                        new_ref_keys.append(bone_name)
+            else:
+                if ref_skel.__boneMap__.get(ref_key) and ref_key not in new_ref_keys:
+                    new_ref_keys.append(ref_key)
+        self.refKeys = new_ref_keys
 
     def setSystemInitialized(self):
         """
