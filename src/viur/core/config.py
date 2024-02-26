@@ -547,6 +547,11 @@ class User(ConfigType):
     access_rights: Multiple[str] = ["root", "admin"]
     """Additional access rights available on this project"""
 
+    invite_code_length: int = 42
+    """"""
+
+    invite_code_duration: int | datetime.timedelta = datetime.timedelta(days=7)
+
     roles: dict[str, str] = {
         "custom": "Custom",
         "user": "User",

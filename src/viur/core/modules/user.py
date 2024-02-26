@@ -40,6 +40,7 @@ class Status(enum.Enum):
     UNSET = 0  # Status is unset
     WAITING_FOR_EMAIL_VERIFICATION = 1  # Waiting for email verification
     WAITING_FOR_ADMIN_VERIFICATION = 2  # Waiting for verification through admin
+    INVITED = 3 # Invited
     DISABLED = 5  # Account disabled
     ACTIVE = 10  # Active
 
@@ -1126,7 +1127,7 @@ class User(List):
     lostPasswordTemplate = "user_lostpassword"
     verifyEmailAddressMail = "user_verify_address"
     passwordRecoveryMail = "user_password_recovery"
-
+    invite_mail = "user_invite"
     authenticationProviders: list[UserAuthentication] = [
         UserPassword,
         GoogleAccount
@@ -1516,6 +1517,33 @@ class User(List):
         # Invalidate all sessions of that user
         session.killSessionByUser(skel["key"])
 
+    def invite(self,user_name: str):
+        skel = self.addSkel()
+        skel["name"] = user_name
+        skel["status"] = Status.INVITED
+
+        if isinstance(conf.user.invite_code_duration,datetime.timedelta):
+            duration = conf.user.invite_code_duration.seconds
+        else:
+            duration = conf.user.invite_code_duration
+        invite_code = securitykey.create(
+            duration=duration,
+            key_length=duration,
+            user_name=skel["name"].lower(),
+            session_bound=False,
+        )
+        skel.toDB()
+        self.send_user_invite_code(user_name,invite_code)
+
+    @tasks.CallDeferred
+    def send_user_invite_code(self, user_name: str, invite_code: str) -> None:
+        if user_skel := self.viewSkel().all().filter("name.idx =", user_name).getSkel():
+            email.sendEMail(
+                tpl=self.invite_mail,
+                skel=user_skel,
+                dests=[user_name],
+                invite_code=invite_code
+            )
 
 @tasks.StartupTask
 def createNewUserIfNotExists():
