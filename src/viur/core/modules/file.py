@@ -180,11 +180,11 @@ def cloudfunction_thumbnailer(fileSkel, existingFiles, params):
                 logging.warning(f"Blob {path} is missing from cloud storage!")
                 return None
             authRequest = google.auth.transport.requests.Request()
-            expiresAt = datetime.datetime.now() + datetime.timedelta(seconds=60)
+            expires_at = datetime.datetime.now() + datetime.timedelta(seconds=60)
             signing_credentials = google.auth.compute_engine.IDTokenCredentials(authRequest, "")
             content_disposition = f"""filename={fileSkel["name"]}"""
             signedUrl = blob.generate_signed_url(
-                expiresAt,
+                expires_at,
                 credentials=signing_credentials,
                 response_disposition=content_disposition,
                 version="v4")
@@ -793,7 +793,7 @@ class File(Tree):
                 raise errors.Unauthorized()
             if "root" not in usr["access"] and "file-view" not in usr["access"]:
                 raise errors.Forbidden()
-            validUntil = "-1"  # Prevent this from being cached down below
+            valid_until = "-1"  # Prevent this from being cached down below
             blob = GOOGLE_STORAGE_BUCKET.get_blob(blobKey)
 
         else:
@@ -803,11 +803,11 @@ class File(Tree):
                 raise errors.Forbidden()
             # Split the blobKey into the individual fields it should contain
             try:
-                dlPath, validUntil, download_filename = base64.urlsafe_b64decode(blobKey).decode("UTF-8").split("\0")
+                dlPath, valid_until, download_filename = base64.urlsafe_b64decode(blobKey).decode("UTF-8").split("\0")
             except:  # It's the old format, without an downloadFileName
-                dlPath, validUntil = base64.urlsafe_b64decode(blobKey).decode("UTF-8").split("\0")
+                dlPath, valid_until = base64.urlsafe_b64decode(blobKey).decode("UTF-8").split("\0")
 
-            if validUntil != "0" and datetime.datetime.strptime(validUntil, "%Y%m%d%H%M") < datetime.datetime.now():
+            if valid_until != "0" and datetime.datetime.strptime(valid_until, "%Y%m%d%H%M") < datetime.datetime.now():
                 blob = None
             else:
                 blob = GOOGLE_STORAGE_BUCKET.get_blob(dlPath)
@@ -825,10 +825,26 @@ class File(Tree):
             ) if item
         )
 
+        def get_expires_at():
+            if valid_until == "0":
+                return datetime.timedelta(days=7)  # Max valid time for singed urls
+            else:
+                try:
+                    expires_at = datetime.datetime.strptime(valid_until, "%Y%m%d%H%M")
+                    if expires_at - datetime.datetime.now() > datetime.timedelta(days=7):
+                        return datetime.timedelta(days=7)
+                    else:
+                        return expires_at
+                except ValueError:
+                    return datetime.timedelta(seconds=60)
+
         if isinstance(_CREDENTIALS, ServiceAccountCredentials):
-            expiresAt = datetime.datetime.now() + datetime.timedelta(seconds=60)
-            signedUrl = blob.generate_signed_url(expiresAt, response_disposition=content_disposition, version="v4")
-            raise errors.Redirect(signedUrl)
+            raise errors.Redirect(
+                blob.generate_signed_url(
+                    get_expires_at(),
+                    response_disposition=content_disposition,
+                    version="v4")
+            )
 
         elif conf.instance.is_dev_server:  # No Service-Account to sign with - Serve everything directly
             response = current.request.get().response
@@ -837,7 +853,7 @@ class File(Tree):
                 response.headers["Content-Disposition"] = content_disposition
             return blob.download_as_bytes()
 
-        if validUntil == "0":  # Its an indefinitely valid URL
+        if valid_until == "0":  # Its an indefinitely valid URL
             if blob.size < 5 * 1024 * 1024:  # Less than 5 MB - Serve directly and push it into the ede caches
                 response = current.request.get().response
                 response.headers["Content-Type"] = blob.content_type
@@ -848,15 +864,14 @@ class File(Tree):
 
         # Default fallback - create a signed URL and redirect
         authRequest = google.auth.transport.requests.Request()
-        expiresAt = datetime.datetime.now() + datetime.timedelta(seconds=60)
         signing_credentials = google.auth.compute_engine.IDTokenCredentials(authRequest, "")
-        signedUrl = blob.generate_signed_url(
-            expiresAt,
-            credentials=signing_credentials,
-            response_disposition=content_disposition,
-            version="v4")
-
-        raise errors.Redirect(signedUrl)
+        raise errors.Redirect(
+            blob.generate_signed_url(
+                get_expires_at(),
+                credentials=signing_credentials,
+                response_disposition=content_disposition,
+                version="v4")
+        )
 
     @exposed
     @force_ssl
