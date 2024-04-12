@@ -13,6 +13,7 @@ from .boolean import BooleanBone
 from .captcha import CaptchaBone
 from .color import ColorBone
 from .credential import CredentialBone
+from .currency import CurrencyBone
 from .date import DateBone
 from .email import EmailBone
 from .file import FileBone
@@ -48,6 +49,7 @@ __all = [
     "ComputeInterval",
     "ComputeMethod",
     "CredentialBone",
+    "CurrencyBone",
     "DateBone",
     "EmailBone",
     "FileBone",
