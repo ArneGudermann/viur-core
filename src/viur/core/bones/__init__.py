@@ -13,7 +13,6 @@ from .boolean import BooleanBone
 from .captcha import CaptchaBone
 from .color import ColorBone
 from .credential import CredentialBone
-from .currency import CurrencyBone
 from .date import DateBone
 from .email import EmailBone
 from .file import FileBone
@@ -38,6 +37,8 @@ from .text import TextBone
 from .treeleaf import TreeLeafBone
 from .treenode import TreeNodeBone
 from .user import UserBone
+
+from .currency import CurrencyBone # noqa: E402 # import works only here because circular imports
 
 # Expose only specific names
 __all = [
