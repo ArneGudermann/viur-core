@@ -119,21 +119,31 @@ class NumericBone(BaseBone):
         return value == self.getEmptyValue()
 
     def singleValueFromClient(self, value, skel, bone_name, client_data):
-        try:
-            value = str(value).replace(",", ".", 1)
-        except:
-            return self.getEmptyValue(), [ReadFromClientError(ReadFromClientErrorSeverity.Invalid, "Invalid Value")]
+        if isinstance(value,(int,float)):
+            value = f"{float(value):16f}"
         else:
-            if self.precision and (str(value).replace(".", "", 1).replace("-", "", 1).isdigit()) and float(
-                    value) >= self.min and float(value) <= self.max:
-                value = round(float(value), self.precision)
-            elif not self.precision and (str(value).replace("-", "", 1).isdigit()) and int(
-                    value) >= self.min and int(value) <= self.max:
-                value = int(value)
-            else:
-                return self.getEmptyValue(), [ReadFromClientError(ReadFromClientErrorSeverity.Invalid, "Invalid Value")]
-        err = self.isInvalid(value)
-        if err:
+            try:
+                value = f"{float(value):16f}"
+            except ValueError:
+                try:
+                    value = str(value).replace(",", ".", 1)
+                except Exception as e:
+                    return self.getEmptyValue(), [
+                        ReadFromClientError(ReadFromClientErrorSeverity.Invalid, "Invalid Value")]
+
+                value = f"{float(value):16f}"
+
+
+        if self.precision and (str(value).replace(".", "", 1).replace("-", "", 1).isdigit()) and float(
+                value) >= self.min and float(value) <= self.max:
+            value = round(float(value), self.precision)
+        elif not self.precision and (str(value).replace("-", "", 1).isdigit()) and int(
+                value) >= self.min and int(value) <= self.max:
+            value = int(value)
+        else:
+            return self.getEmptyValue(), [ReadFromClientError(ReadFromClientErrorSeverity.Invalid, "Invalid Value")]
+
+        if err := self.isInvalid(value):
             return self.getEmptyValue(), [ReadFromClientError(ReadFromClientErrorSeverity.Invalid, err)]
         return value, None
 

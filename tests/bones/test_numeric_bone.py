@@ -47,6 +47,12 @@ class TestNumericBone(unittest.TestCase):
         self.assertEqual(42.6, bone._convert_to_numeric(42.6))
         self.assertEqual(42.6, bone._convert_to_numeric("42.6"))
         self.assertEqual(42.6, bone._convert_to_numeric("42,6"))
+        self.assertEqual(12.34, bone._convert_to_numeric(1.234e1))
+        self.assertEqual(12.34, bone._convert_to_numeric("1.234e1"))
+        self.assertEqual(1.000_000_034, bone._convert_to_numeric("1.000000034e0"))
+        self.assertEqual(1_000_000, bone._convert_to_numeric("1e6"))
+        self.assertEqual(1_000_000, bone._convert_to_numeric("1000000"))
+        self.assertEqual(1_000_000, bone._convert_to_numeric("1_000_000"))
         self.assertIsInstance(bone._convert_to_numeric(42), float)
         with self.assertRaises(TypeError):
             bone._convert_to_numeric(None)
