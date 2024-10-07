@@ -22,7 +22,7 @@ from urllib.request import urlopen
 from google.cloud import storage
 from google.oauth2.service_account import Credentials as ServiceAccountCredentials
 from viur.core import conf, current, db, errors, utils
-from viur.core.bones import BaseBone, BooleanBone, KeyBone, NumericBone, StringBone
+from viur.core.bones import BaseBone, BooleanBone, JsonBone, KeyBone, NumericBone, StringBone
 from viur.core.decorators import *
 from viur.core.i18n import LanguageWrapper
 from viur.core.prototypes.tree import SkelType, Tree, TreeSkel
@@ -356,7 +356,7 @@ class FileLeafSkel(TreeSkel):
         visible=False,
     )
 
-    derived = BaseBone(
+    derived = JsonBone(
         descr="Derived Files",
         readOnly=True,
         visible=False,

@@ -430,12 +430,12 @@ class TextBone(BaseBone):
                                  {"height": x} for x in (self.srcSet.get("height") or [])
                              ]
             }
-            from viur.core.bones.file import ensureDerived
+            from viur.core.bones.file import ensure_derived
             for blob_key in blob_keys:
                 file_obj = db.Query("file").filter("dlkey =", blob_key) \
                     .order(("creationdate", db.SortOrder.Ascending)).getEntry()
                 if file_obj:
-                    ensureDerived(file_obj.key, f"{skel.kindName}_{name}", derive_dict, skel["key"])
+                    ensure_derived(file_obj.key, f"{skel.kindName}_{name}", derive_dict, skel["key"])
 
         return blob_keys
 
