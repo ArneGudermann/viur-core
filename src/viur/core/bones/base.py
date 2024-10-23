@@ -987,6 +987,10 @@ class BaseBone(object):
                 now = utils.utcNow()
 
                 # check if lifetime exceeded
+                logging.error(f"{name=}")
+                logging.error(f"db en {skel.dbEntity=}")
+                logging.error(f"{last_update + self.compute.interval.lifetime}")
+                logging.error(f"{now}")
                 last_update = skel.dbEntity.get(f"_viur_compute_{name}_")
                 skel.accessedValues[f"_viur_compute_{name}_"] = last_update or now
 
@@ -994,16 +998,22 @@ class BaseBone(object):
                     # if so, recompute and refresh updated value
                     skel.accessedValues[name] = value = self._compute(skel, name)
 
-                    def transact():
-                        db_obj = db.Get(skel["key"])
-                        db_obj[f"_viur_compute_{name}_"] = now
-                        db_obj[name] = value
+                    def transact(_key,_now,_value):
+                        logging.error("Write comp todb,")
+                        logging.error(_now)
+                        logging.error(_now)
+                        logging.error(skel["key"])
+                        logging.error(self.compute.interval.lifetime)
+                        db_obj = db.Get(_key)
+                        db_obj[f"_viur_compute_{name}_"] = _now
+                        db_obj[name] = _value
                         db.Put(db_obj)
+                        logging.error(db_obj)
 
                     if db.IsInTransaction():
                         transact()
                     else:
-                        db.RunInTransaction(transact)
+                        db.RunInTransaction(transact,skel["key"],now,value)
 
                     return True
 

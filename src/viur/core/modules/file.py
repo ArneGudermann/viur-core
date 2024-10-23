@@ -22,7 +22,8 @@ from urllib.request import urlopen
 from google.cloud import storage
 from google.oauth2.service_account import Credentials as ServiceAccountCredentials
 from viur.core import conf, current, db, errors, utils
-from viur.core.bones import BaseBone, BooleanBone, KeyBone, NumericBone, StringBone
+from viur.core.bones import BaseBone, BooleanBone, KeyBone, NumericBone, StringBone, UriBone
+from viur.core.bones import Compute, ComputeMethod, ComputeInterval
 from viur.core.decorators import *
 from viur.core.i18n import LanguageWrapper
 from viur.core.prototypes.tree import SkelType, Tree, TreeSkel
@@ -294,7 +295,9 @@ class DownloadUrlBone(BaseBone):
             return True
 
         return False
-
+def generate_url(skel):
+    logging.error(f"{skel}")
+    return "Hello"+str(utils.utcNow())
 
 class FileLeafSkel(TreeSkel):
     """
@@ -350,10 +353,13 @@ class FileLeafSkel(TreeSkel):
         searchable=True,
     )
 
-    downloadUrl = DownloadUrlBone(
+    download_url_json = UriBone(
         descr="Download-URL",
         readOnly=True,
         visible=False,
+        compute=Compute(generate_url,ComputeInterval(
+            ComputeMethod.Lifetime,datetime.timedelta(hours=1)
+        ))
     )
 
     derived = BaseBone(

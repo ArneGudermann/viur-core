@@ -146,6 +146,7 @@ class FileBone(TreeLeafBone):
             "height",
             "derived",
             "public",
+            "download_url_json"
         ),
         public: bool = False,
         **kwargs
