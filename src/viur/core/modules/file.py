@@ -405,7 +405,7 @@ class FileLeafSkel(TreeSkel):
             if importData:
                 if not skelValues["downloadUrl"]:
                     skelValues["downloadUrl"] = importData
-                skelValues["pendingparententry"] = False
+                skelValues["pendingparententry"] = None
 
         conf.main_app.file.inject_serving_url(skelValues)
 
@@ -607,9 +607,9 @@ class File(Tree):
         data = base64.urlsafe_b64decode(data).decode("UTF-8")
 
         match data.count("\0"):
-            case 3:
-                dlpath, valid_until, _ = data.split("\0")
             case 2:
+                dlpath, valid_until, _ = data.split("\0")
+            case 1:
                 # It's the old format, without an downloadFileName
                 dlpath, valid_until = data.split("\0")
             case _:
@@ -745,7 +745,8 @@ class File(Tree):
         skel["crc32c_checksum"] = base64.b64decode(blob.crc32c).hex()
         skel["md5_checksum"] = base64.b64decode(blob.md5_hash).hex()
 
-        return skel.write()
+        skel.write()
+        return skel["key"]
 
     def read(
         self,
@@ -888,7 +889,8 @@ class File(Tree):
         file_skel["width"] = 0
         file_skel["height"] = 0
 
-        key = db.encodeKey(file_skel.write())
+        file_skel.write()
+        key = str(file_skel["key"])
 
         # Mark that entry dirty as we might never receive an add
         self.mark_for_deletion(dlkey)
@@ -907,8 +909,8 @@ class File(Tree):
             session.markChanged()
 
         return self.render.view({
-            "uploadUrl": upload_url,
             "uploadKey": key,
+            "uploadUrl": upload_url,
         })
 
     @exposed
@@ -1175,6 +1177,56 @@ class File(Tree):
             return self.render.addSuccess(skel)
 
         return super().add(skelType, node, *args, **kwargs)
+
+    @exposed
+    def get_download_url(
+        self,
+        key: t.Optional[db.Key] = None,
+        dlkey: t.Optional[str] = None,
+        filename: t.Optional[str] = None,
+        derived: bool = False,
+
+    ):
+        """
+        Request a download url for a given file
+        :param key: The key of the file
+        :param dlkey: The download key of the file
+        :param filename: The filename to be given. If no filename is provided
+            downloadUrls for all derived files are returned in case of `derived=True`.
+        :param derived: True, if a derived file download URL is being requested.
+        """
+        skel = self.viewSkel("leaf")
+        if dlkey is not None:
+            skel = skel.all().filter("dlkey", dlkey).getSkel()
+        elif key is None and dlkey is None:
+            raise errors.BadRequest("No key or dlkey provided")
+
+        if not (skel and skel.read(key)):
+            raise errors.NotFound()
+
+        if not self.canView("leaf", skel):
+            raise errors.Unauthorized()
+
+        dlkey = skel["dlkey"]
+
+        if derived and filename is None:
+            res = {}
+            for filename in skel["derived"]["files"]:
+                res[filename] = self.create_download_url(dlkey, filename, derived)
+        else:
+            if derived:
+                # Check if Filename exist in the Derives. We sign nothing that not exist.
+                if filename not in skel["derived"]["files"]:
+                    raise errors.NotFound("File not in derives")
+            else:
+                if filename is None:
+                    filename = skel["name"]
+                elif filename != skel["name"]:
+                    raise errors.NotFound("Filename not match")
+
+            res = self.create_download_url(dlkey, filename, derived)
+
+        return self.render.view(res)
 
     def onEdit(self, skelType: SkelType, skel: SkeletonInstance):
         super().onEdit(skelType, skel)

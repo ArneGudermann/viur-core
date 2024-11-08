@@ -84,6 +84,41 @@ class ReadFromClientError:
     invalidatedFields: list[str] = None
     """A list of strings containing the names of invalidated fields, if any."""
 
+    def __str__(self):
+        return f"{'.'.join(self.fieldPath)}: {self.errorMessage} [{self.severity.name}]"
+
+
+class ReadFromClientException(Exception):
+    """
+    ReadFromClientError as an Exception to raise.
+    """
+
+    def __init__(self, errors: ReadFromClientError | t.Iterable[ReadFromClientError]):
+        """
+        This is an exception holding ReadFromClientErrors.
+
+        :param errors: Either one or an iterable of errors.
+        """
+        super().__init__()
+
+        # Allow to specifiy a single ReadFromClientError
+        if isinstance(errors, ReadFromClientError):
+            errors = (ReadFromClientError, )
+
+        self.errors = tuple(error for error in errors if isinstance(error, ReadFromClientError))
+
+        # Disallow ReadFromClientException without any ReadFromClientErrors
+        if not self.errors:
+            raise ValueError("ReadFromClientException requires for at least one ReadFromClientError")
+
+        # Either show any errors with severity greater ReadFromClientErrorSeverity.NotSet to the Exception notes,
+        # or otherwise all errors (all have ReadFromClientErrorSeverity.NotSet then)
+        notes_errors = tuple(
+            error for error in self.errors if error.severity.value > ReadFromClientErrorSeverity.NotSet.value
+        )
+
+        self.add_note("\n".join(str(error) for error in notes_errors or self.errors))
+
 
 class UniqueLockMethod(Enum):
     """
@@ -252,20 +287,29 @@ class BaseBone(object):
              and all([isinstance(x, str) for x in languages]))
         ):
             raise ValueError("languages must be None or a list of strings")
+
         if languages and "__default__" in languages:
             raise ValueError("__default__ is not supported as a language")
+
         if (
             not isinstance(required, bool)
             and (not isinstance(required, (tuple, list)) or any(not isinstance(value, str) for value in required))
         ):
             raise TypeError(f"required must be boolean or a tuple/list of strings. Got: {required!r}")
+
         if isinstance(required, (tuple, list)) and not languages:
             raise ValueError("You set required to a list of languages, but defined no languages.")
+
         if isinstance(required, (tuple, list)) and languages and (diff := set(required).difference(languages)):
             raise ValueError(f"The language(s) {', '.join(map(repr, diff))} can not be required, "
                              f"because they're not defined.")
-        if callable(defaultValue) and len(inspect.signature(defaultValue).parameters) < 2:
-            raise ValueError(f"Callable default values require for two parameters (self and skel)")
+
+        if callable(defaultValue):
+            # check if the signature of defaultValue can bind two (fictive) parameters.
+            try:
+                inspect.signature(defaultValue).bind("skel", "bone")  # the strings are just for the test!
+            except TypeError:
+                raise ValueError(f"Callable {defaultValue=} requires for the parameters 'skel' and 'bone'.")
 
         self.languages = languages
 
@@ -309,7 +353,8 @@ class BaseBone(object):
         if compute:
             if not isinstance(compute, Compute):
                 raise TypeError("compute must be an instanceof of Compute")
-
+            if not isinstance(compute.fn, t.Callable):
+                raise ValueError("'compute.fn' must be callable")
             # When readOnly is None, handle flag automatically
             if readOnly is None:
                 self.readOnly = True
@@ -736,29 +781,7 @@ class BaseBone(object):
         :param parentIndexed: A boolean indicating whether the parent bone is indexed.
         :return: A boolean indicating whether the serialization was successful.
         """
-        # Handle compute on write
-        if self.compute:
-            match self.compute.interval.method:
-                case ComputeMethod.OnWrite:
-                    skel.accessedValues[name] = self._compute(skel, name)
-
-                case ComputeMethod.Lifetime:
-                    now = utils.utcNow()
-
-                    last_update = \
-                        skel.accessedValues.get(f"_viur_compute_{name}_") \
-                        or skel.dbEntity.get(f"_viur_compute_{name}_")
-
-                    if not last_update or last_update + self.compute.interval.lifetime < now:
-                        skel.accessedValues[name] = self._compute(skel, name)
-                        skel.dbEntity[f"_viur_compute_{name}_"] = now
-
-                case ComputeMethod.Once:
-                    if name not in skel.dbEntity:
-                        skel.accessedValues[name] = self._compute(skel, name)
-
-            # logging.debug(f"WRITE {name=} {skel.accessedValues=}")
-            # logging.debug(f"WRITE {name=} {skel.dbEntity=}")
+        self.serialize_compute(skel, name)
 
         if name in skel.accessedValues:
             newVal = skel.accessedValues[name]
@@ -802,6 +825,36 @@ class BaseBone(object):
             return True
         return False
 
+    def serialize_compute(self, skel: "SkeletonInstance", name: str) -> None:
+        """
+        This function checks whether a bone is computed and if this is the case, it attempts to serialize the
+        value with the appropriate calculation method
+
+        :param skel: The SkeletonInstance where the current bone is located
+        :param name: The name of the bone in the Skeleton
+        """
+        if not self.compute:
+            return None
+        match self.compute.interval.method:
+            case ComputeMethod.OnWrite:
+                skel.accessedValues[name] = self._compute(skel, name)
+
+            case ComputeMethod.Lifetime:
+                now = utils.utcNow()
+
+                last_update = \
+                    skel.accessedValues.get(f"_viur_compute_{name}_") \
+                    or skel.dbEntity.get(f"_viur_compute_{name}_")
+
+                if not last_update or last_update + self.compute.interval.lifetime < now:
+                    skel.accessedValues[name] = self._compute(skel, name)
+                    skel.dbEntity[f"_viur_compute_{name}_"] = now
+
+            case ComputeMethod.Once:
+                if name not in skel.dbEntity:
+                    skel.accessedValues[name] = self._compute(skel, name)
+
+
     def singleValueUnserialize(self, val):
         """
             Unserializes a single value of the bone from the stored database value.
@@ -836,49 +889,8 @@ class BaseBone(object):
             skel.accessedValues[name] = self.getDefaultValue(skel)
             return False
 
-        # Is this value computed?
-        # In this case, check for configured compute method and if recomputation is required.
-        # Otherwise, the value from the DB is used as is.
-        if self.compute and not self._prevent_compute:
-            match self.compute.interval.method:
-                # Computation is bound to a lifetime?
-                case ComputeMethod.Lifetime:
-                    now = utils.utcNow()
-
-                    # check if lifetime exceeded
-                    last_update = skel.dbEntity.get(f"_viur_compute_{name}_")
-                    skel.accessedValues[f"_viur_compute_{name}_"] = last_update or now
-
-                    # logging.debug(f"READ {name=} {skel.dbEntity=}")
-                    # logging.debug(f"READ {name=} {skel.accessedValues=}")
-
-                    if not last_update or last_update + self.compute.interval.lifetime <= now:
-                        # if so, recompute and refresh updated value
-                        skel.accessedValues[name] = value = self._compute(skel, name)
-
-                        def transact():
-                            db_obj = db.Get(skel["key"])
-                            db_obj[f"_viur_compute_{name}_"] = now
-                            db_obj[name] = value
-                            db.Put(db_obj)
-
-                        if db.IsInTransaction():
-                            transact()
-                        else:
-                            db.RunInTransaction(transact)
-
-                        return True
-
-                # Compute on every deserialization
-                case ComputeMethod.Always:
-                    skel.accessedValues[name] = self._compute(skel, name)
-                    return True
-
-                # Only compute once when loaded value is empty
-                case ComputeMethod.Once:
-                    if loadVal is None:
-                        skel.accessedValues[name] = self._compute(skel, name)
-                        return True
+        if self.unserialize_compute(skel, name):
+            return True
 
         # unserialize value to given config
         if self.languages and self.multiple:
@@ -955,6 +967,54 @@ class BaseBone(object):
 
         skel.accessedValues[name] = res
         return True
+
+    def unserialize_compute(self, skel: "SkeletonInstance", name: str) -> bool:
+        """
+        This function checks whether a bone is computed and if this is the case, it attempts to deserialise the
+        value with the appropriate calculation method
+
+        :param skel : The SkeletonInstance where the current Bone is located
+        :param name: The name of the Bone in the Skeleton
+        :return: True if the Bone was unserialized, False otherwise
+        """
+        if not self.compute or self._prevent_compute:
+            return False
+
+        match self.compute.interval.method:
+            # Computation is bound to a lifetime?
+            case ComputeMethod.Lifetime:
+                now = utils.utcNow()
+                from viur.core.skeleton import RefSkel  # noqa: E402 # import works only here because circular imports
+
+                if issubclass(skel.skeletonCls, RefSkel):  # we have a ref skel we must load the complete Entity
+                    db_obj = db.Get(skel["key"])
+                    last_update = db_obj.get(f"_viur_compute_{name}_")
+                else:
+                    last_update = skel.dbEntity.get(f"_viur_compute_{name}_")
+                    skel.accessedValues[f"_viur_compute_{name}_"] = last_update or now
+
+                if not last_update or last_update + self.compute.interval.lifetime <= now:
+                    # if so, recompute and refresh updated value
+                    skel.accessedValues[name] = value = self._compute(skel, name)
+                    def transact():
+                        db_obj = db.Get(skel["key"])
+                        db_obj[f"_viur_compute_{name}_"] = now
+                        db_obj[name] = value
+                        db.Put(db_obj)
+
+                    if db.IsInTransaction():
+                        transact()
+                    else:
+                        db.RunInTransaction(transact)
+
+                    return True
+
+            # Compute on every deserialization
+            case ComputeMethod.Always:
+                skel.accessedValues[name] = self._compute(skel, name)
+                return True
+
+        return False
 
     def delete(self, skel: 'viur.core.skeleton.SkeletonInstance', name: str):
         """

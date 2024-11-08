@@ -2,6 +2,7 @@ import datetime
 import hashlib
 import logging
 import os
+import re
 import typing as t
 import warnings
 from pathlib import Path
@@ -441,6 +442,40 @@ class Security(ConfigType):
     ]
     """Paths that are accessible without authentication in a closed system, see `closed_system` for details."""
 
+    # CORS Settings
+
+    cors_origins: t.Iterable[str | re.Pattern] | t.Literal["*"] = []
+    """Allowed origins
+    Access-Control-Allow-Origin
+
+    Pattern should be case-insensitive, for example:
+        >>> re.compile(r"^http://localhost:(\d{4,5})/?$", flags=re.IGNORECASE)
+    """  # noqa
+
+    cors_origins_use_wildcard: bool = False
+    """Use * for Access-Control-Allow-Origin -- if possible"""
+
+    cors_methods: t.Iterable[str] = ["get", "head", "post", "options"]  # , "put", "patch", "delete"]
+    """Access-Control-Request-Method"""
+
+    cors_allow_headers: t.Iterable[str | re.Pattern] | t.Literal["*"] = []
+    """Access-Control-Request-Headers
+
+    Can also be set for specific @exposed methods with the @cors decorator.
+
+    Pattern should be case-insensitive, for example:
+        >>> re.compile(r"^X-ViUR-.*$", flags=re.IGNORECASE)
+    """
+
+    cors_allow_credentials: bool = False
+    """
+    Set Access-Control-Allow-Credentials to true
+    to support fetch requests with credentials: include
+    """
+
+    cors_max_age: datetime.timedelta | None = None
+    """Allow caching"""
+
     _mapping = {
         "contentSecurityPolicy": "content_security_policy",
         "referrerPolicy": "referrer_policy",
@@ -513,6 +548,12 @@ class Email(ConfigType):
     (overriding the 'dests'-parameter in email.sendEmail)
     """
 
+    sender_default: str = f"viur@{_project_id}.appspotmail.com"
+    """This sender is used by default for emails.
+    It can be overridden for a specific email by passing the `sender` argument
+    to :meth:`core.email.send_email` or for all emails with :attr:`sender_override`.
+    """
+
     sender_override: str | None = None
     """If set, this sender will be used, regardless of what the templates advertise as sender"""
 
@@ -546,11 +587,12 @@ class I18N(ConfigType):
     language_alias_map: dict[str, str] = {}
     """Allows mapping of certain languages to one translation (i.e. us->en)"""
 
-    language_method: t.Literal["session", "url", "domain"] = "session"
+    language_method: t.Literal["session", "url", "domain", "header"] = "session"
     """Defines how translations are applied:
         - session: Per Session
         - url: inject language prefix in url
         - domain: one domain per language
+        - header: Per Http-Header
     """
 
     language_module_map: dict[str, dict[str, str]] = {}

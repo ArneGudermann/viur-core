@@ -120,7 +120,7 @@ class UserSkel(skeleton.Skeleton):
         visible=False
     )
 
-    def __new__(cls):
+    def __new__(cls, *args, **kwargs):
         """
         Constructor for the UserSkel-class, with the capability
         to dynamically add bones required for the configured
@@ -135,7 +135,7 @@ class UserSkel(skeleton.Skeleton):
             provider.patch_user_skel(cls)
 
         cls.__boneMap__ = skeleton.MetaBaseSkel.generate_bonemap(cls)
-        return super().__new__(cls)
+        return super().__new__(cls, *args, **kwargs)
 
     @classmethod
     def write(cls, skel, *args, **kwargs):
@@ -336,18 +336,9 @@ class UserPassword(UserPrimaryAuthentication):
         # next, check if the password hash matches
         is_okay &= secrets.compare_digest(password_data.get("pwhash", b"-invalid-"), password_hash)
 
-        # next, check if the user account is active
-        is_okay &= (user_skel["status"] or 0) >= Status.ACTIVE.value
-
         if not is_okay:
             self.loginRateLimit.decrementQuota()  # Only failed login attempts will count to the quota
-            skel = self.LoginSkel()
-            return self._user_module.render.login(
-                skel,
-                action="login",
-                loginFailed=True,  # FIXME: Is this still being used?
-                accountStatus=user_skel["status"]  # FIXME: Is this still being used?
-            )
+            return self._user_module.render.login(self.LoginSkel(), action="login")
 
         # check if iterations are below current security standards, and update if necessary.
         if iterations < PBKDF2_DEFAULT_ITERATIONS:
@@ -450,7 +441,7 @@ class UserPassword(UserPrimaryAuthentication):
                 )
             )
 
-        if user_skel["status"] != Status.ACTIVE:  # The account is locked or not yet validated. Abort the process.
+        if user_skel["status"] < Status.ACTIVE:  # The account is locked or not yet validated. Abort the process.
             raise errors.NotFound(
                 i18n.translate(
                     key="viur.modules.user.passwordrecovery.accountlocked",
@@ -1315,7 +1306,7 @@ class User(List):
     def getCurrentUser(self):
         session = current.session.get()
 
-        if session and (user := session.get("user")):
+        if session and session.loaded and (user := session.get("user")):
             skel = self.baseSkel()
             skel.setEntity(user)
             return skel
@@ -1428,9 +1419,11 @@ class User(List):
         self.onLogout(user)
 
         session = current.session.get()
-        take_over = {k: v for k, v in session.items() if k in conf.user.session_persistent_fields_on_logout}
-        session.reset()
-        session |= take_over
+        if take_over := {k: v for k, v in session.items() if k in conf.user.session_persistent_fields_on_logout}:
+            session.reset()
+            session |= take_over
+        else:
+            session.clear()
         current.user.set(None)  # set user to none in context var
         return self.render.logoutSuccess()
 
