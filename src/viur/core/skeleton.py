@@ -141,6 +141,7 @@ class SkeletonInstance:
         "renderAccessedValues",
         "renderPreparation",
         "skeletonCls",
+        "has_hanged"
     }
 
     def __init__(
@@ -434,6 +435,16 @@ class SkeletonInstance:
         res = self.clone()
         memodict[id(self)] = res
         return res
+
+    @property
+    def has_changed(self) -> bool:
+        old_entity = copy.copy(self.dbEntity)
+        key = self["key"]
+        logging.error(key)
+
+        for bone_name, bone_value in  old_entity.items():
+            pass #TODO was muss hier geprüft werden
+        return False
 
 
 class BaseSkeleton(object, metaclass=MetaBaseSkel):
