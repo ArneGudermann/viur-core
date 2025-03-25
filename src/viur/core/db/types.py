@@ -182,3 +182,4 @@ class QueryDefinition:
 
     currentCursor: t.Optional[str] = None
     """Will be set after this query has been run, pointing after the last entity returned"""
+    filter_or = False

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import typing as t
 
 from deprecated.sphinx import deprecated
@@ -180,13 +181,17 @@ def run_single_filter(query: QueryDefinition, limit: int) -> t.List[Entity]:
 
     if query:
         if query.filters:
+            filters = []
             for k, v in query.filters.items():
                 key, op = k.split(" ")
                 if not isinstance(v, list):  # multi equal filters
                     v = [v]
+                logging.debug(f"add to filter {key=} {op=} {v=} ")
                 for val in v:
-                    f = datastore.query.PropertyFilter(key, op, val)
-                    qry.add_filter(filter=f)
+                    filters.append(datastore.query.PropertyFilter(key, op, val))
+
+                qry.add_filter(filter=datastore.query.Or(filters))
+            logging.debug(f"has or {query.filter_or=} {filters=}")
 
         if query.orders:
             hasInvertedOrderings = any(

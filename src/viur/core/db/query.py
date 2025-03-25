@@ -100,6 +100,10 @@ class Query(object):
         #     if isinstance(accessLog, set):
         #         accessLog.add(kind)
 
+    def filter_or(self):
+        self.queries.filter_or = True
+
+
     def setFilterHook(self, hook: TFilterHook) -> TFilterHook | None:
         """
         Installs *hook* as a callback function for new filters.
@@ -163,14 +167,13 @@ class Query(object):
                     % self.srcSkel.kindName
                 )
                 self.queries = None
-        bones = [(y, x) for x, y in skel.items()]
         try:
             # Process filters first
-            for bone, key in bones:
-                bone.buildDBFilter(key, skel, self, filters)
+            for bone_name, bone in skel.items():
+                bone.buildDBFilter(bone_name, skel, self, filters)
             # Parse orders
-            for bone, key in bones:
-                bone.buildDBSort(key, skel, self, filters)
+            for bone_name, bone in skel.items():
+                bone.buildDBSort(bone_name, skel, self, filters)
         except RuntimeError as e:
             logging.exception(e)
             self.queries = None
