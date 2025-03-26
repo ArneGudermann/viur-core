@@ -189,8 +189,10 @@ def run_single_filter(query: QueryDefinition, limit: int) -> t.List[Entity]:
                 logging.debug(f"add to filter {key=} {op=} {v=} ")
                 for val in v:
                     filters.append(datastore.query.PropertyFilter(key, op, val))
-
-                qry.add_filter(filter=datastore.query.Or(filters))
+                if query.filter_or:
+                    qry.add_filter(filter=datastore.query.Or(filters))
+                else:
+                    qry.add_filter(filter=filters)
             logging.debug(f"has or {query.filter_or=} {filters=}")
 
         if query.orders:
