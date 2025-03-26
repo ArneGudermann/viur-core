@@ -1819,7 +1819,7 @@ class SkelList(list):
     __slots__ = (
         "baseSkel",
         "customQueryInfo",
-        "getCursor",
+        "cursor",
         "get_orders",
         "renderPreparation",
     )
@@ -1830,7 +1830,7 @@ class SkelList(list):
         """
         super(SkelList, self).__init__()
         self.baseSkel = baseSkel or {}
-        self.getCursor = lambda: None
+        self.cursor = None
         self.get_orders = lambda: None
         self.renderPreparation = None
         self.customQueryInfo = {}

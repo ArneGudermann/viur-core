@@ -757,6 +757,7 @@ class RelationalBone(BaseBone):
         :raises RuntimeError: If the filtering is invalid, e.g., querying properties not in 'refKeys'
                           or not a bone in 'using'.
         """
+        #todo write new ??
         relSkel, _usingSkelCache = self._getSkels()
         origQueries = dbFilter.queries
 

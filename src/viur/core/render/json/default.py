@@ -194,7 +194,7 @@ class DefaultRender(AbstractRenderer):
                 if "json.bone.structure.inlists" in conf.compatibility:
                     structure = DefaultRender.render_structure(skellist[0].structure())
 
-                cursor = skellist.getCursor()
+                cursor = skellist.cursor
                 orders = skellist.get_orders()
 
             skellist = [self.renderSkelValues(skel) for skel in skellist]

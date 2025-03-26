@@ -4,10 +4,12 @@ import base64
 import copy
 import functools
 import logging
+import re
 import typing as t
+import urllib.parse
 
 from .config import conf
-from .transport import count, get, run_single_filter
+from .transport import count, get, run_single_filter, __client__
 from .types import (
     DATASTORE_BASE_TYPES,
     Entity,
@@ -26,6 +28,8 @@ TOrderHook = t.TypeVar("TOrderHook", bound=t.Callable[["Query", TOrders], TOrder
 TFilterHook = t.TypeVar("TFilterHook", bound=t.Callable[
     ["Query", str, DATASTORE_BASE_TYPES | list[DATASTORE_BASE_TYPES]], TFilters
 ])
+
+from google.cloud import datastore
 
 
 def _entryMatchesQuery(entry: Entity, singleFilter: dict) -> bool:
@@ -62,7 +66,7 @@ def _entryMatchesQuery(entry: Entity, singleFilter: dict) -> bool:
     return True
 
 
-class Query(object):
+class Query(datastore.Query):
     """
     Base Class for querying the datastore. Its API is similar to the google.cloud.datastore.query API,
     but it provides the necessary hooks for relational or random queries, the fulltext search as well as support
@@ -77,13 +81,15 @@ class Query(object):
         :param srcSkelClass: If set, enables data-model depended queries (like relational queries) as well as the
             :meth:fetch method
         """
-        super().__init__()
-        self.kind = kind
+        super().__init__(client=__client__, kind=kind)
+
         self.srcSkel = srcSkelClass
+        # todo muss raus
         self.queries: t.Union[None, QueryDefinition, t.List[QueryDefinition]] = QueryDefinition(kind, {}, [])
         self._filterHook: TFilterHook | None = None
         self._orderHook: TOrderHook | None = None
         # Sometimes, the default merge functionality from MultiQuery is not sufficient
+        # Was machts das
         self._customMultiQueryMerge: t.Union[None, t.Callable[[Query, t.List[t.List[Entity]], int], t.List[Entity]]] \
             = None
         # Some (Multi-)Queries need a different amount of results per subQuery than actually returned
@@ -95,10 +101,6 @@ class Query(object):
         self._lastEntry = None
         self._fulltextQueryString: t.Union[None, str] = None
         self.lastCursor = None
-        # if not kind.startswith("viur") and not kwargs.get("_excludeFromAccessLog"):
-        #     accessLog = currentDbAccessLog.get()
-        #     if isinstance(accessLog, set):
-        #         accessLog.add(kind)
 
     def setFilterHook(self, hook: TFilterHook) -> TFilterHook | None:
         """
@@ -163,6 +165,67 @@ class Query(object):
                     % self.srcSkel.kindName
                 )
                 self.queries = None
+
+        if "query_json" in filters:
+            import json
+            query_str = urllib.parse.unquote_plus(filters["query_json"])
+            query_json = json.loads(query_str)
+            print(f"{query_json=}")
+
+            def filter_builder(data, _filter=None):
+
+                for key, value in data.items():
+                    if key in {"__or", "__and"}:
+                        if key == "__or":
+                            _filter = datastore.query.Or([filter_builder(value),
+                                                          _filter])
+                        else:
+                            _filter = datastore.query.And([filter_builder(value),
+                                                          _filter])
+                    else:
+                        if isinstance(value, list):
+                            operator = "IN"
+                        else:
+                            operator = "="
+                        if _filter is None:
+                            _filter = datastore.query.PropertyFilter(property_name=key, operator=operator, value=value)
+                        else:
+                            _filter = datastore.query.And([
+                                datastore.query.PropertyFilter(property_name=key, operator=operator, value=value),
+                                _filter])
+                return _filter
+
+            query_filter = filter_builder(query_json)
+            self.add_filter(filter=query_filter)
+            return
+        if "query" in filters:
+            query_str = urllib.parse.unquote_plus(filters["query"])
+            print(f"{query_str=}")
+            fields_re = re.compile(r"(\?|\&|\|)(.*?)\=\"(.*?)\"")
+            fields_matches = fields_re.findall(query_str)
+            filter_build = None
+            logging.debug(f"{fields_matches=}")
+            fields_matches.reverse()
+            for match in fields_matches:
+
+                if match[0] == "?":
+                    filter_build = datastore.query.PropertyFilter(property_name=match[1], operator="=", value=match[2])
+
+                elif match[0] == "&":
+                    filter_build = datastore.query.And([
+                        datastore.query.PropertyFilter(property_name=match[1], operator="=", value=match[2]),
+                        filter_build])
+                    self.add_filter(
+                        filter=datastore.query.PropertyFilter(property_name=match[1], operator="=", value=match[2]))
+
+                elif match[0] == "|":
+                    filter_build = datastore.query.Or([
+                        datastore.query.PropertyFilter(property_name=match[1], operator="=", value=match[2]),
+                        filter_build])
+            self.add_filter(filter=filter_build)
+            logging.debug(f"self.filters={self.filters=}")
+            return
+
         bones = [(y, x) for x, y in skel.items()]
         try:
             # Process filters first
@@ -190,6 +253,7 @@ class Query(object):
             self.limit(int(filters["limit"]))
         return self
 
+    # todo ist depracated
     def filter(self, prop: str, value: DATASTORE_BASE_TYPES | list[DATASTORE_BASE_TYPES]) -> t.Self:
         """
         Adds a new constraint to this query.
@@ -200,6 +264,7 @@ class Query(object):
         :param value: The value of that filter.
         :returns: Returns the query itself for chaining.
         """
+
         if self.queries is None:
             # This query is already unsatisfiable and adding more constrains to this won't change this
             return self
@@ -220,6 +285,11 @@ class Query(object):
             op = "="
         else:
             field, op = prop.split(" ")
+
+        logging.debug(f"{field=}, {op=}, {value=}")
+        self.add_filter(property_name=field, operator=op, value=value)
+        return self
+
         if op.lower() in {"!=", "in"}:
             if isinstance(self.queries, list):
                 raise NotImplementedError("You cannot use multiple IN or != filter")
@@ -233,7 +303,7 @@ class Query(object):
                 newFilter.filters[f"{field} >"] = value
                 self.queries.append(newFilter)
             else:  # IN filter
-                if not isinstance(value, (list,tuple)):
+                if not isinstance(value, (list, tuple)):
                     raise ValueError("Value must be list or tuple if using IN filter!")
                 for val in value:
                     newFilter = copy.deepcopy(origQuery)
@@ -266,6 +336,7 @@ class Query(object):
                         self.queries.orders = [(field, SortOrder.Ascending)] + (self.queries.orders or [])
         return self
 
+    '''
     def order(self, *orderings: t.Tuple[str, SortOrder]) -> t.Self:
         """
         Specify a query sorting.
@@ -341,6 +412,7 @@ class Query(object):
             self.queries.orders = list(orderings)
 
         return self
+        '''
 
     def setCursor(self, startCursor: str, endCursor: t.Optional[str] = None) -> t.Self:
         """
@@ -400,30 +472,6 @@ class Query(object):
                 query.distinct = keyList
         return self
 
-    def getCursor(self) -> t.Optional[str]:
-        """
-        Get a valid cursor from the last run of this query.
-
-        The source of this cursor varies depending on what the last call was:
-        - :meth:`run`: A cursor that points immediately behind the
-            last result pulled off the returned iterator.
-        - :meth:`get`: A cursor that points immediately behind the
-            last result in the returned list.
-
-        :returns: A cursor that can be used in subsequent query requests or None if that query does not support
-            cursors or there are no more elements to fetch
-        """
-        if isinstance(self.queries, QueryDefinition):
-            q = self.queries
-        elif isinstance(self.queries, list):
-            for query in self.queries:
-                if query.currentCursor:
-                    q = query
-                    break
-            else:
-                q = self.queries[0]
-        return base64.urlsafe_b64encode(q.currentCursor).decode("ASCII") if q.currentCursor else None
-
     def get_orders(self) -> t.List[t.Tuple[str, SortOrder]] | None:
         """
         Get the orders from this query.
@@ -461,90 +509,6 @@ class Query(object):
         """
         return run_single_filter(query, limit)
 
-    def _merge_multi_query_results(self, input_result: t.List[t.List[Entity]]) -> t.List[Entity]:
-        """
-        Merge the lists of entries into a single list; removing duplicates and restoring sort-order
-        :param input_result: Nested Lists of Entries returned by each individual query run
-        :return: Sorted & deduplicated list of entries
-        """
-        seen_keys = set()
-        res = []
-        for subList in input_result:
-            for entry in subList:
-                key = entry.key
-                if key in seen_keys:
-                    continue
-                seen_keys.add(key)
-                res.append(entry)
-        # FIXME: What about filters that mix different inequality filters?
-        # Currently, we'll now simply ignore any implicit sortorder.
-        return self._resort_result(res, {}, self.queries[0].orders)
-
-    def _resort_result(
-        self,
-        entities: t.List[Entity],
-        filters: t.Dict[str, DATASTORE_BASE_TYPES],
-        orders: t.List[t.Tuple[str, SortOrder]],
-    ) -> t.List[Entity]:
-        """
-        Internal helper that takes a (deduplicated) list of entities that has been fetched from different internal
-        queries (the datastore does not support IN filters itself, so we have to query each item in that array
-        separately) and resorts the list so it matches the query again.
-
-        :param entities: t.List of entities to resort
-        :param filters: The filter used in the query (used to determine implicit sort order by an inequality filter)
-        :param orders: The sort-orders to apply
-        :return: The sorted list
-        """
-
-        def getVal(src: Entity, fieldVars: t.Union[str, t.Tuple[str]], direction: SortOrder) -> t.Any:
-            # Descent into the target until we reach the property we're looking for
-            if isinstance(fieldVars, tuple):
-                for fv in fieldVars:
-                    if fv not in src:
-                        return None
-                    src = src[fv]
-            else:
-                if fieldVars not in src:
-                    return (str(type(None)), 0)
-                src = src[fieldVars]
-            # Lists are handled differently, here the smallest or largest value determines it's position in the result
-            if isinstance(src, list) and len(src):
-                try:
-                    src.sort()
-                except TypeError:
-                    # It's a list of dicts or the like for which no useful sort-order is specified
-                    pass
-                if direction == SortOrder.Ascending:
-                    src = src[0]
-                else:
-                    src = src[-1]
-            # We must return this tuple because inter-type comparison isn't possible in Python3 anymore
-            return str(type(src)), src if src is not None else 0
-
-        # Check if we have an inequality filter which implies a sortorder
-        ineqFilter = None
-        for k, _ in filters.items():
-            end = k[-2:]
-            if "<" in end or ">" in end:
-                ineqFilter = k.split(" ")[0]
-                break
-        if ineqFilter and (not orders or not orders[0][0] == ineqFilter):
-            orders = [(ineqFilter, SortOrder.Ascending)] + (orders or [])
-
-        for orderField, direction in orders[::-1]:
-            if orderField == KEY_SPECIAL_PROPERTY:
-                pass  # FIXME !!
-            # entities.sort(key=lambda x: x.key, reverse=direction == SortOrder.Descending)
-            else:
-                try:
-                    entities.sort(key=functools.partial(getVal, fieldVars=orderField, direction=direction),
-                                  reverse=direction == SortOrder.Descending)
-                except TypeError:
-                    # We hit some incomparable types
-                    pass
-        return entities
-
     def _fixKind(self, resultList: t.List[Entity]) -> t.List[Entity]:
         """
         Jump to parentKind if necessary (used in relations)
@@ -560,7 +524,7 @@ class Query(object):
 
         return resultList
 
-    def run(self, limit: int = -1) -> t.List[Entity]:
+    def run(self, limit: int = -1) -> datastore.query.Iterator:
         """
         Run this query.
 
@@ -578,10 +542,6 @@ class Query(object):
         :raises: :exc:`BadQueryError` if an IN filter in combination with a sort order on\
         another property is provided
         """
-        if self.queries is None:
-            if conf["traceQueries"]:
-                logging.debug(f"Query on {self.kind} aborted as being not satisfiable")
-            return []
 
         if self._fulltextQueryString:
             if utils.is_in_transaction():
@@ -595,29 +555,10 @@ class Query(object):
                     res = [x for x in res if _entryMatchesQuery(x, self.queries.filters)]
                 else:  # Multi-Query, must match at least one
                     res = [x for x in res if any([_entryMatchesQuery(x, y.filters) for y in self.queries])]
-        elif isinstance(self.queries, list):
-            # We have more than one query to run
-            if self._calculateInternalMultiQueryLimit:
-                limit = self._calculateInternalMultiQueryLimit(self, limit if limit != -1 else self.queries[0].limit)
-            res = []
-            # We run all queries first (preventing multiple round-trips to the server)
-            for singleQuery in self.queries:
-                res.append(self._run_single_filter_query(singleQuery, limit if limit != -1 else singleQuery.limit))
-            # Wait for the actual results to arrive and convert the protobuffs to Entries
-            res = [self._fixKind(x) for x in res]
-            if self._customMultiQueryMerge:
-                # We have a custom merge function, use that
-                res = self._customMultiQueryMerge(self, res, limit if limit != -1 else self.queries[0].limit)
-            else:
-                # We must merge (and sort) the results ourself
-                res = self._merge_multi_query_results(res)
-        else:  # We have just one single query
-            res = self._fixKind(self._run_single_filter_query(
-                    self.queries, limit if limit != -1 else self.queries.limit))
-        if res:
-            self._lastEntry = res[-1]
-        return res
+        # todo fixkinds for relation
+        return super().fetch(limit=limit)
 
+    # todo später
     def count(self, up_to: int = 2 ** 63 - 1) -> int:
         """
             The count operation cost one entity read for up to 1,000 index entries matched
@@ -635,7 +576,7 @@ class Query(object):
         else:
             return count(queryDefinition=self.queries, up_to=up_to)
 
-    def fetch(self, limit: int = -1) -> "SkelList['SkeletonInstance']" | None:
+    def fetch(self, limit: int = 100) -> "SkelList['SkeletonInstance']" | None:
         """
         Run this query and fetch results as :class:`core.skeleton.SkelList`.
 
@@ -656,10 +597,10 @@ class Query(object):
             another property is provided
         """
         from viur.core.skeleton import SkelList, SkeletonInstance
-
+        # todo getskeleton by kind ?
         if self.srcSkel is None:
             raise NotImplementedError("This query has not been created using skel.all()")
-        # limit = limit if limit != -1 else self._limit
+
         if limit != -1 and not (0 < limit <= 100):
             logging.error(("Limit", limit))
             raise NotImplementedError(
@@ -672,7 +613,7 @@ class Query(object):
             skel_instance = SkeletonInstance(self.srcSkel.skeletonCls, bone_map=self.srcSkel.boneMap)
             skel_instance.dbEntity = e
             res.append(skel_instance)
-        res.getCursor = lambda: self.getCursor()
+        res.cursor = str(db_res.next_page_token)  # todo encode is bytes
         res.get_orders = lambda: self.get_orders()
         return res
 
@@ -690,15 +631,24 @@ class Query(object):
         Otherwise, it might not return all results as the AppEngine doesn't maintain the view \
         for a query for more than ~30 seconds.
         """
-        if self.queries is None:  # Noting to pull here
-            raise StopIteration()
-        elif isinstance(self.queries, list):
-            raise ValueError("No iter on Multiqueries")
+        cursor = None
+        c = 0
         while True:
-            yield from self._run_single_filter_query(self.queries, 100)
-            if not self.queries.currentCursor:  # We reached the end of that query
+            # todo higher limit just for testing
+            # todo maybe use googles iter ?
+            print(f"call : {c}")
+            c += 1
+
+            if cursor is None:
+                result_iterator = super().fetch(limit=100)
+            else:
+                result_iterator = super().fetch(limit=100, start_cursor=cursor)
+
+            yield from result_iterator
+            if not result_iterator.next_page_token:  # We reached the end of that query
                 break
-            self.queries.startCursor = self.queries.currentCursor
+
+            cursor = result_iterator.next_page_token
 
     def getEntry(self) -> t.Union[None, Entity]:
         """
@@ -736,6 +686,7 @@ class Query(object):
 
         :returns: The cloned query.
         """
+        # tod we need this ?
         res = Query(self.getKind(), self.srcSkel)
         res.kind = self.kind
         res.queries = copy.deepcopy(self.queries)
