@@ -170,10 +170,8 @@ class Query(datastore.Query):
             import json
             query_str = urllib.parse.unquote_plus(filters["query_json"])
             query_json = json.loads(query_str)
-            print(f"{query_json=}")
 
             def filter_builder(data, _filter=None):
-
                 for key, value in data.items():
                     if key in {"__or", "__and"}:
                         if key == "__or":
@@ -194,10 +192,12 @@ class Query(datastore.Query):
                                 datastore.query.PropertyFilter(property_name=key, operator=operator, value=value),
                                 _filter])
                 return _filter
+            _filter =filter_builder(query_json)
+            print(_filter)
+            self.add_filter(filter=_filter)
+            print(self)
+            return self
 
-            query_filter = filter_builder(query_json)
-            self.add_filter(filter=query_filter)
-            return
         if "query" in filters:
             query_str = urllib.parse.unquote_plus(filters["query"])
             print(f"{query_str=}")
@@ -224,16 +224,16 @@ class Query(datastore.Query):
                         filter_build])
             self.add_filter(filter=filter_build)
             logging.debug(f"self.filters={self.filters=}")
-            return
+            return self
 
-        bones = [(y, x) for x, y in skel.items()]
+
         try:
             # Process filters first
-            for bone, key in bones:
-                bone.buildDBFilter(key, skel, self, filters)
+            for bone_name, bone in skel.items():
+                bone.buildDBFilter(bone_name, skel, self, filters)
             # Parse orders
-            for bone, key in bones:
-                bone.buildDBSort(key, skel, self, filters)
+            for bone_name, bone in skel.items():
+                bone.buildDBSort(bone_name, skel, self, filters)
         except RuntimeError as e:
             logging.exception(e)
             self.queries = None

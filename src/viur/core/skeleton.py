@@ -1963,7 +1963,7 @@ def updateRelations(destKey: db.Key, minChangeTime: int, changedBone: t.Optional
             updateTxn(skel, srcRel["src"].key, srcRel.key)
         else:
             db.run_in_transaction(updateTxn, skel, srcRel["src"].key, srcRel.key)
-    nextCursor = updateListQuery.getCursor()
+    nextCursor = updateListQuery.cursor
     if len(updateList) == 5 and nextCursor:
         updateRelations(destKey, minChangeTime, changedBone, nextCursor)
 
