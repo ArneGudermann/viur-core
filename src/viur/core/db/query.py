@@ -315,6 +315,7 @@ class Query(object):
 
         # Check for correct order subscript
         orders = []
+        logging.debug(f"adding orders: {orderings=}")
         for order in orderings:
             if isinstance(order, str):
                 order = (order, SortOrder.Ascending)
@@ -325,20 +326,21 @@ class Query(object):
 
             orders.append(order)
 
+        orderings = tuple(orders)
         if self._orderHook is not None:
             try:
-                orders = self._orderHook(self, orders)
+                orderings = self._orderHook(self, orderings)
             except RuntimeError:
                 self.queries = None
                 return self
-            if orders is None:
+            if orderings is None:
                 return self
 
         if isinstance(self.queries, list):
             for query in self.queries:
-                query.orders = list(orders)
+                query.orders = list(orderings)
         else:
-            self.queries.orders = list(orders)
+            self.queries.orders = list(orderings)
 
         return self
 
