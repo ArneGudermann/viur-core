@@ -255,9 +255,7 @@ class UserPassword(UserPrimaryAuthentication):
     passwordRecoveryTemplate = "user_passwordrecover"
     passwordRecoveryMail = "user_password_recovery"
     passwordRecoverySuccessTemplate = "user_passwordrecover_success"
-    passwordRecoveryStep1Template = "user_passwordrecover_step1"
-    passwordRecoveryStep2Template = "user_passwordrecover_step2"
-    passwordRecoveryStep3Template = "user_passwordrecover_step3"
+
 
     # The default rate-limit for password recovery (10 tries each 15 minutes)
     passwordRecoveryRateLimit = RateLimit("user.passwordrecovery", 10, 15, "ip")
@@ -298,26 +296,6 @@ class UserPassword(UserPrimaryAuthentication):
         )
 
     class LostPasswordStep2Skel(skeleton.RelSkel):
-        recovery_key = StringBone(
-            descr="Recovery Key",
-            required=True,
-            params={
-                "tooltip": i18n.translate(
-                    key="viur.core.modules.user.userpassword.lostpasswordstep2.recoverykey",
-                    defaultText="Please enter the validation key you've received via e-mail.",
-                    hint="Shown when the user needs more than 15 minutes to paste the key",
-                ),
-            }
-        )
-
-    class LostPasswordStep3Skel(skeleton.RelSkel):
-        # send the recovery key again, in case the password is rejected by some reason.
-        recovery_key = StringBone(
-            descr="Recovery Key",
-            visible=False,
-            readOnly=True,
-        )
-
         password = PasswordBone(
             descr="New Password",
             required=True,
@@ -387,7 +365,8 @@ class UserPassword(UserPrimaryAuthentication):
         return self.next_or_finish(user_skel)
 
     @exposed
-    def pwrecover(self, recovery_key: str | None = None, skey: str | None = None, *args, **kwargs):
+    @skey(allow_empty=True)
+    def pwrecover(self, recovery_key: str | None = None, *args, **kwargs):
         """
             This implements a password recovery process which lets users set a new password for their account,
             after validating a recovery key sent by email.
@@ -404,6 +383,9 @@ class UserPassword(UserPrimaryAuthentication):
             To prevent automated attacks, the fist step is guarded by a captcha and we limited calls to this function
             to 10 actions per 15 minutes. (One complete recovery process consists of two calls).
         """
+        passwordRecoveryStep1Template = "user_passwordrecover_step1"
+        password_recoverykey_send_template = "user_passwordrecover_step2"
+        passwordRecoveryStep2Template = "user_passwordrecover_step2"
         self.passwordRecoveryRateLimit.assertQuotaIsAvailable()
         current_request = current.request.get()
 
@@ -412,11 +394,7 @@ class UserPassword(UserPrimaryAuthentication):
             skel = self.LostPasswordStep1Skel()
 
             if not current_request.isPostRequest or not skel.fromClient(kwargs):
-                return self._user_module.render.edit(skel, tpl=self.passwordRecoveryStep1Template)
-
-            # validate security key
-            if not securitykey.validate(skey):
-                raise errors.PreconditionFailed()
+                return self._user_module.render.render("user_passwordrecover_step1",skel,tpl=passwordRecoveryStep1Template)
 
             self.passwordRecoveryRateLimit.decrementQuota()
 
@@ -434,25 +412,24 @@ class UserPassword(UserPrimaryAuthentication):
 
             # step 2 is only an action-skel, and can be ignored by a direct link in the
             # e-mail previously sent. It depends on the implementation of the specific project.
-            return self._user_module.render.edit(
-                self.LostPasswordStep2Skel(),
-                tpl=self.passwordRecoveryStep2Template,
+            return self._user_module.render.render(
+                action="user_passwordrecover_key_send",
+                skel={},
+                tpl=password_recoverykey_send_template,
             )
 
         # in step 3
-        skel = self.LostPasswordStep3Skel()
+        skel = self.LostPasswordStep2Skel()
         skel["recovery_key"] = recovery_key  # resend the recovery key again, in case the fromClient() fails.
 
         # check for any input; Render input-form again when incomplete.
         if not skel.fromClient(kwargs) or not current_request.isPostRequest:
-            return self._user_module.render.edit(
+            return self._user_module.render.render(
+                "user_passwordrecover_step2",
                 skel=skel,
-                tpl=self.passwordRecoveryStep3Template,
+                tpl=passwordRecoveryStep2Template,
             )
 
-        # validate security key
-        if not securitykey.validate(skey):
-            raise errors.PreconditionFailed()
 
         if not (recovery_request := securitykey.validate(recovery_key, session_bound=False)):
             raise errors.PreconditionFailed(
