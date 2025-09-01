@@ -252,9 +252,12 @@ class UserPassword(UserPrimaryAuthentication):
     verifySuccessTemplate = "user_verify_success"
     verifyEmailAddressMail = "user_verify_address"
     verifyFailedTemplate = "user_verify_failed"
-    passwordRecoveryTemplate = "user_passwordrecover"
     passwordRecoveryMail = "user_password_recovery"
     passwordRecoverySuccessTemplate = "user_passwordrecover_success"
+    passwordRecoveryStep1Template = "user_passwordrecover_step1"
+    passwordRecoveryStep2Template = "user_passwordrecover_step2"
+    passwordRecoverySendTemplate = "user_passwordrecover_send"
+
 
 
     # The default rate-limit for password recovery (10 tries each 15 minutes)
@@ -374,8 +377,8 @@ class UserPassword(UserPrimaryAuthentication):
             The process is as following:
 
             - The user enters his email adress
-            - We'll generate a random code and store it as a security-key and call sendUserPasswordRecoveryCode
-            - sendUserPasswordRecoveryCode will run in the background, check if we have a user with that name
+            - We'll generate a random code and store it as a security-key and call send_user_password_recovery_code
+            - send_user_password_recovery_code will run in the background, check if we have a user with that name
               and send a link with the code . It runs as a deferredTask so we don't leak the information if a user
               account exists.
             - If the user received his email, he can click on the link and set a new password for his account.
@@ -383,9 +386,6 @@ class UserPassword(UserPrimaryAuthentication):
             To prevent automated attacks, the fist step is guarded by a captcha and we limited calls to this function
             to 10 actions per 15 minutes. (One complete recovery process consists of two calls).
         """
-        passwordRecoveryStep1Template = "user_passwordrecover_step1"
-        password_recoverykey_send_template = "user_passwordrecover_step2"
-        passwordRecoveryStep2Template = "user_passwordrecover_step2"
         self.passwordRecoveryRateLimit.assertQuotaIsAvailable()
         current_request = current.request.get()
 
@@ -394,7 +394,11 @@ class UserPassword(UserPrimaryAuthentication):
             skel = self.LostPasswordStep1Skel()
 
             if not current_request.isPostRequest or not skel.fromClient(kwargs):
-                return self._user_module.render.render("user_passwordrecover_step1",skel,tpl=passwordRecoveryStep1Template)
+                return self._user_module.render.render(
+                    "user_passwordrecover_step1",
+                    skel,
+                    tpl=self.passwordRecoveryStep1Template
+                )
 
             self.passwordRecoveryRateLimit.decrementQuota()
 
@@ -406,19 +410,18 @@ class UserPassword(UserPrimaryAuthentication):
             )
 
             # Send the code in background
-            self.sendUserPasswordRecoveryCode(
+            self.send_user_password_recovery_code(
                 skel["name"], recovery_key, current_request.request.headers["User-Agent"]
             )
 
-            # step 2 is only an action-skel, and can be ignored by a direct link in the
-            # e-mail previously sent. It depends on the implementation of the specific project.
+           # Send an Information to the user that must check his emails
             return self._user_module.render.render(
                 action="user_passwordrecover_key_send",
-                skel={},
-                tpl=password_recoverykey_send_template,
+                skel=skel,
+                tpl=self.passwordRecoverySendTemplate,
             )
 
-        # in step 3
+        # in step 2
         skel = self.LostPasswordStep2Skel()
         skel["recovery_key"] = recovery_key  # resend the recovery key again, in case the fromClient() fails.
 
@@ -427,7 +430,7 @@ class UserPassword(UserPrimaryAuthentication):
             return self._user_module.render.render(
                 "user_passwordrecover_step2",
                 skel=skel,
-                tpl=passwordRecoveryStep2Template,
+                tpl=self.passwordRecoveryStep2Template,
             )
 
 
@@ -474,7 +477,7 @@ class UserPassword(UserPrimaryAuthentication):
         )
 
     @tasks.CallDeferred
-    def sendUserPasswordRecoveryCode(self, user_name: str, recovery_key: str, user_agent: str) -> None:
+    def send_user_password_recovery_code(self, user_name: str, recovery_key: str, user_agent: str) -> None:
         """
             Sends the given recovery code to the user given in userName. This function runs deferred
             so there's no timing sidechannel that leaks if this user exists. Per default, we'll send the
