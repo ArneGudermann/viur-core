@@ -397,4 +397,19 @@ de = {
     "viur.core.user.status.10": "Aktiv",
 
     "viur.core.modules.user.bone.status": "Kontostatus",
+
+    #fluidpage
+    "core.fluidpage.kind.text":"Text",
+    "core.fluidpage.kind.image":"Bild",
+    "core.fluidpage.kind.video":"Video",
+
+    "core.fluidpage.height.auto": "Automatisch durch den Inhalt",
+    "core.fluidpage.height.small": "Niedrig",
+    "core.fluidpage.height.medium": "Normal",
+    "core.fluidpage.height.large": "Hoch",
+    "core.fluidpage.height.100": "Komplette Bildschirmhöhe",
+    "core.fluidpage.height.1-1": "Höhe im Seitenverhältnis: Quadrat (1 zu 1)",
+    "core.fluidpage.height.16-9": "Höhe im Seitenverhältnis: 16 zu 9",
+    "core.fluidpage.height.16-10": "Höhe im Seitenverhältnis: 16 zu 10",
+    "core.fluidpage.height.4-3": "Höhe im Seitenverhältnis: 4 zu 3",
 }

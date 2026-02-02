@@ -61,4 +61,15 @@ en = {
     "viur.core.user.status.10": "Active",
 
     "viur.core.modules.user.bone.status": "Account status",
+
+    #fluidpage
+    "core.fluidpage.height.auto": "Automatically based on content",
+    "core.fluidpage.height.small": "Low",
+    "core.fluidpage.height.medium": "Normal",
+    "core.fluidpage.height.large": "High",
+    "core.fluidpage.height.100": "Full screen height",
+    "core.fluidpage.height.1-1": "Height with aspect ratio: square (1:1)",
+    "core.fluidpage.height.16-9": "Height with aspect ratio: 16:9",
+    "core.fluidpage.height.16-10": "Height with aspect ratio: 16:10",
+    "core.fluidpage.height.4-3": "Height with aspect ratio: 4:3"
 }
