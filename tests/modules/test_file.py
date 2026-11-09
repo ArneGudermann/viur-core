@@ -1,5 +1,6 @@
 import base64
 import datetime
+import time
 from unittest import mock
 
 from abstract import ViURTestCase
@@ -419,3 +420,220 @@ class TestFileOverwriteUpload(ViURTestCase):
         module.canEdit.return_value = False
         with self.assertRaises(errors.Forbidden):
             File.add._func(module, "leaf", key="k")
+
+
+class TestDownloadUrlExpiryRounding(ViURTestCase):
+    """The expiry of download urls is rounded up, so the url stays stable and browsers can cache it."""
+
+    def setUp(self):
+        super().setUp()
+        from viur.core import conf
+        conf.file_hmac_key = b"test-hmac-key-for-unit-tests"
+        with mock.patch("google.cloud.storage.Client"):
+            from viur.core.modules import file as file_module
+        self.file_module = file_module
+
+    def _expiry_at(self, now, expires):
+        """Create a download url at ``now`` and return the expiry encoded into it."""
+        real_datetime = datetime.datetime
+
+        class FrozenDatetime(real_datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return now
+
+        with mock.patch.object(self.file_module.datetime, "datetime", FrozenDatetime):
+            url = self.file_module.File.create_download_url("testdlkey", "document.pdf", expires=expires)
+
+        blob_key = url.removeprefix(self.file_module.File.DOWNLOAD_URL_PREFIX).split("?", 1)[0]
+        return base64.urlsafe_b64decode(blob_key).decode("UTF-8").split("\0")[1]
+
+    def test_expiry_is_rounded_up_to_the_step(self):
+        self.assertEqual(
+            "202611061215",
+            self._expiry_at(datetime.datetime(2026, 11, 6, 11, 3, 20), datetime.timedelta(hours=1)),
+        )
+
+    def test_url_is_stable_within_a_step(self):
+        first = self._expiry_at(datetime.datetime(2026, 11, 6, 11, 0, 1), datetime.timedelta(hours=1))
+        second = self._expiry_at(datetime.datetime(2026, 11, 6, 11, 14, 59), datetime.timedelta(hours=1))
+        self.assertEqual(first, second)
+
+    def test_expiry_on_a_step_boundary_is_kept(self):
+        self.assertEqual(
+            "202611061230",
+            self._expiry_at(datetime.datetime(2026, 11, 6, 11, 30), datetime.timedelta(hours=1)),
+        )
+
+    def test_rounding_crosses_midnight(self):
+        self.assertEqual(
+            "202611070000",
+            self._expiry_at(datetime.datetime(2026, 11, 6, 22, 50), datetime.timedelta(hours=1)),
+        )
+
+    def test_short_lifetime_is_not_rounded(self):
+        self.assertEqual(
+            "202611061108",
+            self._expiry_at(datetime.datetime(2026, 11, 6, 11, 3, 20), datetime.timedelta(minutes=5)),
+        )
+
+    def test_unlimited_url(self):
+        self.assertEqual("0", self._expiry_at(datetime.datetime(2026, 11, 6, 11, 3), None))
+
+
+class TestSignedUrlCache(ViURTestCase):
+
+    def setUp(self):
+        super().setUp()
+        with mock.patch("google.cloud.storage.Client"):
+            from viur.core.modules.file import _SignedUrlCache
+        self.cache = _SignedUrlCache(max_entries=2)
+
+    def test_hit(self):
+        self.cache.set(("a",), "url-a", time.time() + 600)
+        self.assertEqual("url-a", self.cache.get(("a",), min_remaining=300)[0])
+
+    def test_miss(self):
+        self.assertIsNone(self.cache.get(("a",), min_remaining=300))
+
+    def test_entry_with_too_little_lifetime_left_is_dropped(self):
+        self.cache.set(("a",), "url-a", time.time() + 200)
+        self.assertIsNone(self.cache.get(("a",), min_remaining=300))
+        self.assertIsNone(self.cache.get(("a",), min_remaining=0))
+
+    def test_least_recently_used_entry_is_evicted(self):
+        expires_at = time.time() + 600
+        self.cache.set(("a",), "url-a", expires_at)
+        self.cache.set(("b",), "url-b", expires_at)
+        self.cache.get(("a",), min_remaining=0)
+        self.cache.set(("c",), "url-c", expires_at)
+        self.assertIsNotNone(self.cache.get(("a",), min_remaining=0))
+        self.assertIsNone(self.cache.get(("b",), min_remaining=0))
+        self.assertIsNotNone(self.cache.get(("c",), min_remaining=0))
+
+
+class TestDownloadSignedUrlCaching(ViURTestCase):
+    """:meth:`File.download` must not sign a new url (IAM call) and look up the blob (GCS call) on every request."""
+
+    def setUp(self):
+        super().setUp()
+        from viur.core import conf, current
+        conf.file_hmac_key = b"test-hmac-key-for-unit-tests"
+
+        with mock.patch("google.cloud.storage.Client"):
+            from viur.core.modules import file as file_module
+        self.file_module = file_module
+        File = file_module.File
+
+        file_module._signed_url_cache.clear()
+        self.addCleanup(file_module._signed_url_cache.clear)
+
+        self.blob = mock.Mock()
+        self.blob.generate_signed_url.return_value = "https://gcs/signed"
+        self.bucket = mock.Mock()
+        self.bucket.name = "bucket"
+        self.bucket.get_blob.return_value = self.blob
+
+        module = mock.Mock()
+        module.get_bucket.return_value = self.bucket
+        module.hmac_verify = File.hmac_verify
+        module.is_valid_filename = File.is_valid_filename
+        module.SIGNED_URL_LIFETIME = File.SIGNED_URL_LIFETIME
+        module._redirect_to_signed_url = File._redirect_to_signed_url
+        module._sign_blob_url = lambda *args, **kwargs: File._sign_blob_url(module, *args, **kwargs)
+        self.module = module
+
+        self.signing_credentials = mock.Mock()
+        for patcher in (
+            mock.patch.object(type(conf.instance), "is_dev_server", False),
+            mock.patch.object(file_module, "_get_signing_credentials", return_value=self.signing_credentials),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+        self.request = mock.MagicMock()
+        self.request.response.headers = {}
+        token = current.request.set(self.request)
+        self.addCleanup(current.request.reset, token)
+
+    def _download(self, url, **kwargs):
+        from viur.core import errors
+        path, query = url.removeprefix(self.file_module.File.DOWNLOAD_URL_PREFIX).split("?sig=")
+        self.request.response.headers = {}
+        with self.assertRaises(errors.Redirect) as ctx:
+            self.file_module.File.download._func(self.module, path, sig=query, **kwargs)
+        return ctx.exception
+
+    def test_signed_url_is_reused(self):
+        url = self.file_module.File.create_download_url("dlkey", "image.jpg")
+
+        first = self._download(url)
+        second = self._download(url)
+
+        self.assertEqual("https://gcs/signed", first.url)
+        self.assertEqual(first.url, second.url)
+        self.blob.generate_signed_url.assert_called_once()
+        self.bucket.get_blob.assert_called_once_with("dlkey/source/image.jpg")
+        self.assertIs(self.signing_credentials, self.blob.generate_signed_url.call_args.kwargs["credentials"])
+
+    def test_signed_url_is_cached_per_content_disposition(self):
+        url = self.file_module.File.create_download_url("dlkey", "image.jpg")
+
+        self._download(url)
+        self._download(url, download=True)
+
+        self.assertEqual(2, self.blob.generate_signed_url.call_count)
+
+    def test_redirect_is_cacheable_by_the_browser(self):
+        url = self.file_module.File.create_download_url("dlkey", "image.jpg")
+
+        self._download(url)
+
+        cache_control = self.request.response.headers["Cache-Control"]
+        self.assertTrue(cache_control.startswith("private, max-age="))
+        max_age = int(cache_control.rsplit("=", 1)[1])
+        self.assertLessEqual(max_age, self.file_module.File.SIGNED_URL_LIFETIME.total_seconds() - 60)
+        self.assertGreater(max_age, 0)
+
+    def test_browser_cache_does_not_outlive_the_download_url(self):
+        url = self.file_module.File.create_download_url("dlkey", "image.jpg", expires=datetime.timedelta(minutes=2))
+
+        self._download(url)
+
+        max_age = int(self.request.response.headers["Cache-Control"].rsplit("=", 1)[1])
+        self.assertLessEqual(max_age, 120)
+
+    def test_expired_url_is_gone_without_touching_gcs(self):
+        from viur.core import errors
+        url = self.file_module.File.create_download_url("dlkey", "image.jpg", expires=datetime.timedelta(hours=-1))
+        path, sig = url.removeprefix(self.file_module.File.DOWNLOAD_URL_PREFIX).split("?sig=")
+
+        with self.assertRaises(errors.Gone):
+            self.file_module.File.download._func(self.module, path, sig=sig)
+
+        self.bucket.get_blob.assert_not_called()
+
+    def test_missing_blob_is_gone(self):
+        from viur.core import errors
+        self.bucket.get_blob.return_value = None
+        url = self.file_module.File.create_download_url("dlkey", "image.jpg")
+        path, sig = url.removeprefix(self.file_module.File.DOWNLOAD_URL_PREFIX).split("?sig=")
+
+        with self.assertRaises(errors.Gone):
+            self.file_module.File.download._func(self.module, path, sig=sig)
+
+
+class TestSigningCredentials(ViURTestCase):
+
+    def test_signing_credentials_are_created_once(self):
+        with mock.patch("google.cloud.storage.Client"):
+            from viur.core.modules import file as file_module
+
+        with mock.patch.object(file_module, "_signing_credentials", None), \
+                mock.patch("google.auth.compute_engine.IDTokenCredentials") as id_token_credentials, \
+                mock.patch("google.auth.transport.requests.Request"):
+            first = file_module._get_signing_credentials()
+            second = file_module._get_signing_credentials()
+
+        self.assertIs(first, second)
+        id_token_credentials.assert_called_once()

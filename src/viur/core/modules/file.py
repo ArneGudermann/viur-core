@@ -13,10 +13,12 @@ import PIL.ImageCms
 import re
 import requests
 import string
+import threading
+import time
 import typing as t
 import warnings
 
-from collections import namedtuple
+from collections import OrderedDict, namedtuple
 from urllib.parse import parse_qs, quote as urlquote, unquote as urlunquote, urlsplit
 from urllib.request import urlopen
 from google.appengine.api import blobstore, images
@@ -57,6 +59,75 @@ PUBLIC_DLKEY_SUFFIX = "_pub"
 
 _private_bucket = GOOGLE_STORAGE_CLIENT.lookup_bucket(PRIVATE_BUCKET_NAME)
 _public_bucket = None
+
+# Credentials used to sign GCS urls on App Engine (no service account key available).
+# Created once per instance, as creating them costs a request to the metadata server.
+_signing_credentials = None
+_signing_credentials_lock = threading.Lock()
+
+
+def _get_signing_credentials():
+    """
+    Returns the credentials used to sign GCS urls via the IAM signBlob API.
+
+    The credentials are created lazily and reused for all requests of this instance. The underlying
+    signer refreshes its access token on its own once it has expired.
+    """
+    global _signing_credentials
+
+    if _signing_credentials is None:
+        with _signing_credentials_lock:
+            if _signing_credentials is None:
+                _signing_credentials = google.auth.compute_engine.IDTokenCredentials(
+                    google.auth.transport.requests.Request(), ""
+                )
+
+    return _signing_credentials
+
+
+class _SignedUrlCache:
+    """
+    Small thread-safe in-memory cache for signed GCS urls.
+
+    Signing a url requires a call to the IAM API, which makes up most of the time spent in
+    :meth:`File.download`. Cached urls are handed out while at least half of their lifetime is left.
+    """
+
+    def __init__(self, max_entries: int = 1024):
+        self.max_entries = max_entries
+        self._entries: OrderedDict[tuple, tuple[str, float]] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, key: tuple, min_remaining: float) -> tuple[str, float] | None:
+        """
+        Returns ``(url, expires_at)`` for ``key`` if the url is still valid for at least
+        ``min_remaining`` seconds, otherwise ``None``.
+        """
+        with self._lock:
+            if not (entry := self._entries.get(key)):
+                return None
+
+            if entry[1] - time.time() < min_remaining:
+                del self._entries[key]
+                return None
+
+            self._entries.move_to_end(key)
+            return entry
+
+    def set(self, key: tuple, url: str, expires_at: float):
+        with self._lock:
+            self._entries[key] = (url, expires_at)
+            self._entries.move_to_end(key)
+
+            while len(self._entries) > self.max_entries:
+                self._entries.popitem(last=False)
+
+    def clear(self):
+        with self._lock:
+            self._entries.clear()
+
+
+_signed_url_cache = _SignedUrlCache()
 
 # FilePath is a descriptor for ViUR file components
 FilePath = namedtuple("FilePath", ("dlkey", "is_derived", "filename"))
@@ -517,6 +588,15 @@ class File(Tree):
     """Maximum size of image files that should be analysed in :meth:`set_image_meta`.
     Default: 10 MiB"""
 
+    SIGNED_URL_LIFETIME = datetime.timedelta(minutes=10)
+    """Lifetime of the signed GCS urls :meth:`download` redirects to.
+    Signed urls are cached and reused while at least half of this lifetime is left."""
+
+    DOWNLOAD_URL_EXPIRY_STEP = datetime.timedelta(minutes=15)
+    """The expiry of urls created by :meth:`create_download_url` is rounded up to a multiple of this step,
+    so the url stays the same for a while and browsers can cache the file. Lifetimes shorter than the step
+    are not rounded."""
+
     leafSkelCls = FileLeafSkel
     nodeSkelCls = FileNodeSkel
 
@@ -619,7 +699,19 @@ class File(Tree):
 
             download_filename = urlquote(download_filename)
 
-        expires = (datetime.datetime.now() + expires).strftime("%Y%m%d%H%M") if expires else 0
+        if expires:
+            expires_at = datetime.datetime.now() + expires
+
+            if (step := cls.DOWNLOAD_URL_EXPIRY_STEP) and expires >= step:
+                # Round up to the next step, so the url doesn't change on every call
+                step_seconds = int(step.total_seconds())
+                midnight = expires_at.replace(hour=0, minute=0, second=0, microsecond=0)
+                elapsed = int((expires_at - midnight).total_seconds())
+                expires_at = midnight + datetime.timedelta(seconds=-(-elapsed // step_seconds) * step_seconds)
+
+            expires = expires_at.strftime("%Y%m%d%H%M")
+        else:
+            expires = 0
 
         data = base64.urlsafe_b64encode(f"""{filepath}\0{expires}\0{download_filename or ""}""".encode("UTF-8"))
         sig = cls.hmac_sign(data)
@@ -1070,6 +1162,7 @@ class File(Tree):
             raise errors.BadRequest(f"The blob key {blobKey!r} has an invalid amount of encoded values!")
 
         bucket = self.get_bucket(dlPath.split("/", 1)[0])
+        valid_until = None  # Point in time until the requested download url is valid, None if unlimited
 
         if not sig:
             # Check if the current user has the right to download *any* blob present in this application.
@@ -1079,7 +1172,7 @@ class File(Tree):
             if "root" not in usr["access"] and "file-view" not in usr["access"]:
                 raise errors.Forbidden()
             validUntil = "-1"  # Prevent this from being cached down below
-            blob = bucket.get_blob(blobKey)
+            blob_path = blobKey
 
         else:
             # We got an request including a signature (probably a guest or a user without file-view access)
@@ -1087,23 +1180,40 @@ class File(Tree):
             if not self.hmac_verify(blobKey, sig):
                 raise errors.Forbidden()
 
-            if validUntil != "0" and datetime.datetime.strptime(validUntil, "%Y%m%d%H%M") < datetime.datetime.now():
-                blob = None
-            else:
-                blob = bucket.get_blob(dlPath)
+            if validUntil != "0":
+                valid_until = datetime.datetime.strptime(validUntil, "%Y%m%d%H%M")
+                if valid_until < datetime.datetime.now():
+                    raise errors.Gone("The requested blob has expired.")
 
-        if not blob:
-            raise errors.Gone("The requested blob has expired.")
+            blob_path = dlPath
 
         if not filename:
-            filename = urlunquote(download_filename) if download_filename else blob.name.rsplit("/", 1)[-1]
+            filename = urlunquote(download_filename) if download_filename else blob_path.rsplit("/", 1)[-1]
 
         content_disposition = utils.build_content_disposition_header(filename, attachment=download)
 
-        if isinstance(_CREDENTIALS, ServiceAccountCredentials):
-            expiresAt = datetime.datetime.now() + datetime.timedelta(seconds=60)
-            signedUrl = blob.generate_signed_url(expiresAt, response_disposition=content_disposition, version="v4")
-            raise errors.Redirect(signedUrl)
+        uses_service_account = isinstance(_CREDENTIALS, ServiceAccountCredentials)
+        signed_url_cache_key = (bucket.name, blob_path, content_disposition)
+
+        # Signed urls are only cached for requests that end up in a redirect. Files served directly
+        # never get into the cache, so a hit always means that this request is answered by a redirect, too.
+        if (uses_service_account or not conf.instance.is_dev_server) and (
+            cached := _signed_url_cache.get(
+                signed_url_cache_key,
+                min_remaining=self.SIGNED_URL_LIFETIME.total_seconds() / 2,
+            )
+        ):
+            self._redirect_to_signed_url(*cached, valid_until=valid_until, browser_cache=bool(sig))
+
+        if not (blob := bucket.get_blob(blob_path)):
+            raise errors.Gone("The requested blob has expired.")
+
+        if uses_service_account:
+            self._redirect_to_signed_url(
+                *self._sign_blob_url(blob, content_disposition, signed_url_cache_key),
+                valid_until=valid_until,
+                browser_cache=bool(sig),
+            )
 
         elif conf.instance.is_dev_server:  # No Service-Account to sign with - Serve everything directly
             response = current.request.get().response
@@ -1122,16 +1232,71 @@ class File(Tree):
                 return blob.download_as_bytes()
 
         # Default fallback - create a signed URL and redirect
-        authRequest = google.auth.transport.requests.Request()
-        expiresAt = datetime.datetime.now() + datetime.timedelta(seconds=60)
-        signing_credentials = google.auth.compute_engine.IDTokenCredentials(authRequest, "")
-        signedUrl = blob.generate_signed_url(
-            expiresAt,
-            credentials=signing_credentials,
-            response_disposition=content_disposition,
-            version="v4")
+        self._redirect_to_signed_url(
+            *self._sign_blob_url(
+                blob,
+                content_disposition,
+                signed_url_cache_key,
+                credentials=_get_signing_credentials(),
+            ),
+            valid_until=valid_until,
+            browser_cache=bool(sig),
+        )
 
-        raise errors.Redirect(signedUrl)
+    def _sign_blob_url(
+        self,
+        blob: storage.Blob,
+        content_disposition: str,
+        cache_key: tuple,
+        credentials: t.Any = None,
+    ) -> tuple[str, float]:
+        """
+        Creates a signed url for ``blob`` and stores it in the signed url cache.
+
+        :param blob: The blob to sign the url for.
+        :param content_disposition: The Content-Disposition GCS shall respond with.
+        :param cache_key: The key to store the signed url under.
+        :param credentials: The credentials to sign with; None uses the credentials of the storage client.
+        :return: A tuple of the signed url and its expiry as unix timestamp.
+        """
+        expires_at = time.time() + self.SIGNED_URL_LIFETIME.total_seconds()
+        signed_url = blob.generate_signed_url(
+            datetime.datetime.fromtimestamp(expires_at, tz=datetime.timezone.utc),
+            credentials=credentials,
+            response_disposition=content_disposition,
+            version="v4",
+        )
+        _signed_url_cache.set(cache_key, signed_url, expires_at)
+        return signed_url, expires_at
+
+    @staticmethod
+    def _redirect_to_signed_url(
+        signed_url: str,
+        expires_at: float,
+        valid_until: datetime.datetime | None = None,
+        browser_cache: bool = True,
+    ) -> t.NoReturn:
+        """
+        Redirects to ``signed_url``.
+
+        For signed download urls the redirect may be cached by the browser for as long as the signed url
+        stays valid (minus a safety margin), but never beyond the validity of the requested download url.
+
+        :param signed_url: The signed GCS url to redirect to.
+        :param expires_at: Expiry of the signed url as unix timestamp.
+        :param valid_until: Validity of the requested download url, None if unlimited.
+        :param browser_cache: Allow the browser to cache the redirect. Must be False for requests
+            authorized by the current user instead of a signature.
+        """
+        max_age = expires_at - time.time() - 60
+
+        if valid_until is not None:
+            max_age = min(max_age, (valid_until - datetime.datetime.now()).total_seconds())
+
+        if browser_cache and max_age >= 1:
+            current.request.get().response.headers["Cache-Control"] = f"private, max-age={int(max_age)}"
+
+        raise errors.Redirect(signed_url)
 
     @exposed
     @force_ssl
